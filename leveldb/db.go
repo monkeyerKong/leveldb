@@ -55,15 +55,15 @@ type DB struct {
 	journal         *journal.Writer
 	journalWriter   storage.Writer
 	journalFd       storage.FileDesc
-	frozenJournalFd storage.FileDesc
+	frozenJournalFd storage.FileDesc // 对应inmutable 持久化，会生成一个 freozen journal
 	frozenSeq       uint64
 
 	// Snapshot.
-	snapsMu   sync.Mutex
-	snapsList *list.List
+	snapsMu   sync.Mutex // 快照锁
+	snapsList *list.List // 双向链表，用于保持快照
 
 	// Write.
-	batchPool    sync.Pool
+	batchPool    sync.Pool //用于保存batch,可以快速生成batch对象，因为单次请求，最小的单位就是batch
 	writeMergeC  chan writeMerge
 	writeMergedC chan bool
 	writeLockC   chan struct{}
@@ -931,6 +931,7 @@ func (db *DB) GetSnapshot() (*Snapshot, error) {
 // GetProperty returns value of the given property name.
 //
 // Property names:
+//
 //	leveldb.num-files-at-level{n}
 //		Returns the number of files at level 'n'.
 //	leveldb.stats

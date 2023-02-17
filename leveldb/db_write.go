@@ -16,17 +16,41 @@ import (
 )
 
 func (db *DB) writeJournal(batches []*Batch, seq uint64, sync bool) error {
+	// 获取一个signal writer, 且该writer 已经填写chunk的header部分，剩下的需要填写data，及batch
+	// singal writer.buf 就是journal的block的定义， 首先填充chunk header
+	// chunk[0..4] = checksum
+	// chunk[5..6] = data Length
+	// chunk[7] = type, 取值 full| first | middllle | last
+
+	// 定义batch header
+	//  chunk[8..len(journal.seq)] = batchheader.seq
+	// chuck[len(journal.seq), batch.size] = batchheader.size
+
+	// 开始真正的数据部分 batch data
+	// chunk[] keyType   update/delete
+	// chunk[] keylength
+	// chunk[] key
+	// chunk[] valuelength
+	// chunk[] value
+
+	// chunk容量 = blocksize = 32k, 整个源码里我都把 journal的buf 称作 chunk
+
 	wr, err := db.journal.Next()
 	if err != nil {
 		return err
 	}
+
+	// seq : db.seq leveldb的操作序列号
 	if err := writeBatchesWithHeader(wr, batches, seq); err != nil {
 		return err
 	}
+	// 写入最后记录最后一个 类型为last, 调用系统flush函数
 	if err := db.journal.Flush(); err != nil {
 		return err
 	}
 	if sync {
+		// 可以看得出，单次请求(单次/批量)操作，就会做做一次flush，及刷盘一次，这快mysql 有一个参数sync_binlog 可以控制redo log 的刷新方式，如果sync_binlog =1 的时候，也是这种方式
+		// 底层实现就是调用os.fsync(), 立即刷缓存内容到磁盘
 		return db.journalWriter.Sync()
 	}
 	return nil
@@ -154,11 +178,16 @@ func (db *DB) unlockWrite(overflow bool, merged int, err error) {
 func (db *DB) writeLocked(batch, ourBatch *Batch, merge, sync bool) error {
 	// Try to flush memdb. This method would also trying to throttle writes
 	// if it is too fast and compaction cannot catch-up.
+
+	// 获取mdb内存表，表是一个sstable file skiplist，一个有两个skiplist ,sstable file skiplist， 一个是sstable block skiplist。
+	// mdbFree: 表空闲大小, db.flush 会自动对db.ref 进行 ++操作，
 	mdb, mdbFree, err := db.flush(batch.internalLen)
 	if err != nil {
 		db.unlockWrite(false, 0, err)
 		return err
 	}
+
+	// 这里要进行ref的--操作。引用计数对资源管理是比较常用的手段
 	defer mdb.decref()
 
 	var (
@@ -220,20 +249,22 @@ func (db *DB) writeLocked(batch, ourBatch *Batch, merge, sync bool) error {
 	}
 
 	// Release ourBatch if any.
+	// 别忘了了回收batch到sync.pool里
 	if ourBatch != nil {
 		defer db.batchPool.Put(ourBatch)
 	}
 
-	// Seq number.
+	// Seq number. 只要有操作，db.seq 都会 ++, 自增, 这块为什么不需要原子操作呢，使用 atomic.AddInt64(db.seq, 1)
+
 	seq := db.seq + 1
 
-	// Write journal.
+	// Write journal., 先写日志
 	if err := db.writeJournal(batches, seq, sync); err != nil {
 		db.unlockWrite(overflow, merged, err)
 		return err
 	}
 
-	// Put batches.
+	// Put batches. 后写内存
 	for _, batch := range batches {
 		if err := batch.putMem(seq, mdb.DB); err != nil {
 			panic(err)
@@ -359,9 +390,15 @@ func (db *DB) putRec(kt keyType, key, value []byte, wo *opt.WriteOptions) error 
 		}
 	}
 
+	// 从sync.pool 获取 Batch结构
 	batch := db.batchPool.Get().(*Batch)
+	// 重置字段， 主要是b.index, b.data, b.internalLen 都为0
 	batch.Reset()
+
+	// 填充相关数据
 	batch.appendRec(kt, key, value)
+
+	// 开始写
 	return db.writeLocked(batch, batch, merge, sync)
 }
 

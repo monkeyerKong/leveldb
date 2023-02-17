@@ -25,6 +25,7 @@
 // Neither Readers or Writers are safe to use concurrently.
 //
 // Example code:
+//
 //	func read(r io.Reader) ([]string, error) {
 //		var ss []string
 //		journals := journal.NewReader(r, nil, true, true)
@@ -382,14 +383,18 @@ func (w *Writer) fillHeader(last bool) {
 	}
 	if last {
 		if w.first {
+			// 一条记录在一个block 只有一个chunk ，则为full
 			w.buf[w.i+6] = fullChunkType
 		} else {
+			// 一条记录在一个block 有多个chunk, 且当前是最后一个chunk ，则为last
 			w.buf[w.i+6] = lastChunkType
 		}
 	} else {
 		if w.first {
+			// 一条记录在一个block 有多个chunk, 且当前是第一个chunk ，则为first
 			w.buf[w.i+6] = firstChunkType
 		} else {
+			// 一条记录在一个block 有多个chunk, 且当前是中间几个chunk的一个 ，则为middle
 			w.buf[w.i+6] = middleChunkType
 		}
 	}
@@ -414,10 +419,14 @@ func (w *Writer) writePending() {
 		return
 	}
 	if w.pending {
+		// 这块是对chunk的收尾， 最后一个数据类型是last
 		w.fillHeader(true)
+
+		// 所有的batch 都已经写入journal
 		w.pending = false
 	}
 	_, w.err = w.w.Write(w.buf[w.written:w.j])
+	//写入的字节，即chunck右边的游标
 	w.written = w.j
 }
 
@@ -435,12 +444,17 @@ func (w *Writer) Close() error {
 // Flush finishes the current journal, writes to the underlying writer, and
 // flushes it if that writer implements interface{ Flush() error }.
 func (w *Writer) Flush() error {
+	// flush 也会导致 journal 的seq 自增
 	w.seq++
+
 	w.writePending()
 	if w.err != nil {
 		return w.err
 	}
 	if w.f != nil {
+
+		//写完最后一条记录，调用系统调用f.flush()函数，刷到os 内核的缓冲区，此时并没有刷新到文件中，请区别：os.flush 和 os.fsync 的区别
+		// 这种日志，在不同的系统叫法可能不通，但是都是一个东西，wal log
 		w.err = w.f.Flush()
 		return w.err
 	}
@@ -470,28 +484,56 @@ func (w *Writer) Reset(writer io.Writer) (err error) {
 // Next returns a writer for the next journal. The writer returned becomes stale
 // after the next Close, Flush or Next call, and should no longer be used.
 func (w *Writer) Next() (io.Writer, error) {
+
+	// 当前journal seq 自增+1
 	w.seq++
 	if w.err != nil {
 		return nil, w.err
 	}
+	// 判断是否填充journal 日志的头
 	if w.pending {
+
+		// 一个journal journal[block,block1,...blockn]
+		// 一个block 是32k  block[(chunk, chunk1),..., (chunkn)]
+		// 填充日志的头 journal chunk header
+		// chunk[0..4] = checksum
+		// chunk[5..6] = data Length
+		// chunk[7] = type, 取值 full| first | middllle | last
+
+		// 填充日志的data w.buf[blocksize]
+		// chunk[8..] = value  具体的value值
 		w.fillHeader(true)
 	}
+
+	// i, j 两个游标，用于控制 chunk的左右边界
+	// i游标 指向新的chunk 边界，即上一个chunk的右边界
 	w.i = w.j
+
+	// 滑动当前chunk的右边界到 chunk data 的索引, header: chunk[0-7], data: chunk[8:]
 	w.j += headerSize
-	// Check if there is room in the block for the header.
+
+	// Check if there is room in the block for the header. 判断chunk的长度是否大于block size, 如果大于则需要new 一个block
+	//这样 一个记录的就跨block了，即chunk 跨 block
+
 	if w.j > blockSize {
-		// Fill in the rest of the block with zeroes.
+		// Fill in the rest of the block with zeroes. chunk[j-blocksize] 这块区域需要填充 0， 保证block 对齐, 不空洞
 		for k := w.i; k < blockSize; k++ {
 			w.buf[k] = 0
 		}
+		// 写当前的chunk到journal日志中/block中, new 一个新的chunk
+		// chunk.i = 0, chunk.j = headerSize, chunk.writen = 0, w.blocknum ++
 		w.writeBlock()
+
 		if w.err != nil {
 			return nil, w.err
 		}
 	}
+	// 第一个chunk
 	w.first = true
+
+	// 因为只填充了header , 还需要继续填充 data, 即chunk[8..], 所以还需要设置pending
 	w.pending = true
+
 	return singleWriter{w, w.seq}, nil
 }
 
@@ -517,19 +559,55 @@ func (x singleWriter) Write(p []byte) (int, error) {
 		return 0, w.err
 	}
 	n0 := len(p)
+	// 这种方式在golang 经常用, 循环判断，比if有效
 	for len(p) > 0 {
-		// Write a block, if it is full.
+		// Write a block, if it is full. 查看 chunk 右边的游标是否超过blocksize, 即chunk的容量
 		if w.j == blockSize {
 			w.fillHeader(false)
+
+			// 写block到journal中, 重置buf.i左游标，buf.written 写入到journal的字节数, 重置chunk header
+			// 包含chunk的header的 checksum、datalength、type 等
 			w.writeBlock()
 			if w.err != nil {
 				return 0, w.err
 			}
+
+			// 因为len(p) >0 ，所以batch的record的字节数需要跨block了
 			w.first = false
 		}
-		// Copy bytes into the buffer.
+		//  record 不跨 chunk
+		//						record 1
+		//					chunk header
+		//										 batch header
+		//									 						batch data
+		// chunk[
+		//			(checksum, datalength, type, batch.seq, batch.size, keytype, keylength, key, valuelength, value), 第一个record
+		//			(keytype, keylength, key, valuelength, value),  第二个record
+
+		//			..,
+		//      	n		第n个record
+		//		]
+		// record 跨chunk
+		//  chunk[
+		//			(checksum, datalength, type, keytype, keylength, key, valuelength, value), 第二个record, 跨chunk 没有batch header
+		//			(keytype, keylength, key, valuelength, value),  第二个record
+		//			..,
+		//      	n		第n个record
+		//		]
+		//
+		// chunk header
+		// 		[0] checksum
+		// 		[1] datalength
+		// 		[2] chunktype: full | first | middle | last
+		//
+
+		// Copy bytes into the buffer., 复制[]byte n个字节到w.buf中, chunk容纳的字节数=blocksize
 		n := copy(w.buf[w.j:], p)
+
+		// 移动block的chunk右边的游标向右移动
 		w.j += n
+
+		// 把剩下的字节len(p) - n 重新复制到[]byte p中, 需要放到下一个buf的chunk中
 		p = p[n:]
 	}
 	return n0, nil
