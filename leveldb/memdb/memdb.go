@@ -183,14 +183,19 @@ type DB struct {
 	cmp comparer.BasicComparer
 	rnd *rand.Rand
 
-	mu     sync.RWMutex
+	mu sync.RWMutex
+
+	// skiplist 存储数据的数组，实现区别教科书上的实现 , kv存储与索引的位置是分开的, 其实batch 也是数据与索引分开的
+	// kvData [] = [(key1, value1), (key2, value2),...], 对于数据的操作就是append， 比如常用的方法：l.pushback(). 复杂度O(1), 这样是为什么写的块原因
+
 	kvData []byte
+	// 把当前kv 称作 一个节点 ， 即node
 	// Node data:
-	// [0]         : KV offset
-	// [1]         : Key length
-	// [2]         : Value length
-	// [3]         : Height
-	// [3..height] : Next nodes
+	// [0]         : KV offset, 每个node在kvData中的起始位置
+	// [1]         : Key length, 当前node.key的长度
+	// [2]         : Value length , 当前node.value的长度
+	// [3]         : Height ,当前node的高度
+	// [3..height] : Next nodes,
 	nodeData  []int
 	prevNode  [tMaxHeight]int
 	maxHeight int

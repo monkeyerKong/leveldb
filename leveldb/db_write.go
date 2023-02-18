@@ -267,6 +267,7 @@ func (db *DB) writeLocked(batch, ourBatch *Batch, merge, sync bool) error {
 	// Put batches. 后写内存
 	for _, batch := range batches {
 		if err := batch.putMem(seq, mdb.DB); err != nil {
+			// 写内存失败，直接panic， 而写journal日志失败处理方式是报错
 			panic(err)
 		}
 		seq += uint64(batch.Len())

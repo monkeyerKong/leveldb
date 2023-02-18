@@ -255,9 +255,21 @@ func (b *Batch) decode(data []byte, expectedLen int) error {
 }
 
 func (b *Batch) putMem(seq uint64, mdb *memdb.DB) error {
+	// seq 是 db的seq
 	var ik []byte
+	// batch index 结构
+	// [0] keytype   udpate/delete
+	// [1] keypos    key batch.data中的的起始位置，可快速定位key
+	// [2] keylength key的长度
+	// [3] valuepos  value batch.data中的的起始位置，可快定位value
+	// [4] valuelen  value的长度
+
 	for i, index := range b.index {
+		// level db中的key 不是用户直接使用的k，而是 一个称作内部的key， 结构是 userKey + db.seq(7字节) + keytype(1字节)
+		// keytype update/delete
 		ik = makeInternalKey(ik, index.k(b.data), seq+uint64(i), index.keyType)
+
+		// 开始写入到mtable 里, 它是是skiplist结构
 		if err := mdb.Put(ik, index.v(b.data)); err != nil {
 			return err
 		}
