@@ -187,8 +187,8 @@ type DB struct {
 
 	// skiplist 存储数据的数组，实现区别教科书上的实现 , kv存储与索引的位置是分开的, 其实batch 也是数据与索引分开的
 	// kvData [] = [(key1, value1), (key2, value2),...], 对于数据的操作就是append， 比如常用的方法：l.pushback(). 复杂度O(1), 这样是为什么写的块原因
-
 	kvData []byte
+
 	// 把当前kv 称作 一个节点 ， 即node
 	// Node data:
 	// [0]         : KV offset, 每个node在kvData中的起始位置
@@ -196,11 +196,22 @@ type DB struct {
 	// [2]         : Value length , 当前node.value的长度
 	// [3]         : Height ,当前node的高度
 	// [3..height] : Next nodes,
-	nodeData  []int
-	prevNode  [tMaxHeight]int
+
+	// 比如：level0 next node
+	// level1 next node
+	// level2 next node
+	// level-height next node
+	nodeData []int
+
+	// 当前操作node 节点各个level 中的prev node
+	prevNode [tMaxHeight]int
+
+	// skiplist 的最大高度，leveldb = 12
 	maxHeight int
-	n         int
-	kvSize    int
+
+	// 统计信息，n表示 节点的个数，kvsize  表示 skiplist kvdata总大小, 不能通过len(kvData)计算，因为删除数据，不会删除kvData中内容，只会删除索引关系
+	n      int
+	kvSize int
 }
 
 func (p *DB) randHeight() (h int) {
@@ -280,38 +291,62 @@ func (p *DB) findLast() int {
 //
 // It is safe to modify the contents of the arguments after Put returns.
 func (p *DB) Put(key []byte, value []byte) error {
+	// 操作skiplist 整个skiplist锁保护
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	// 判断是否存在元素, 返回一个node和exact，exact = true ，表示找到， exact = false 表示没有找到，此时node 为l0 上刚好大于key节点，即key会放到它前面
+	// 位置应该是这样.prve node->current node->next node. 其实把node 叫next node 更合适
 	if node, exact := p.findGE(key, true); exact {
+		//发现node，kvdata 只追加不修改, 索引(nodedata)需要重置node 的偏移量(offset)，重新计算value的长度
 		kvOffset := len(p.kvData)
 		p.kvData = append(p.kvData, key...)
 		p.kvData = append(p.kvData, value...)
 		p.nodeData[node] = kvOffset
 		m := p.nodeData[node+nVal]
 		p.nodeData[node+nVal] = len(value)
+
+		// 在上面也提到了，不能用len(kvData) 计算kvsize
 		p.kvSize += len(value) - m
 		return nil
 	}
-
+	// 随机高度，使用的概率问题
 	h := p.randHeight()
+
 	if h > p.maxHeight {
 		for i := p.maxHeight; i < h; i++ {
+			// 此时prvenode 是当前需要插入的node 在各个level的 prev node, 如果随机出来的高度大于maxHeight, 那么需要初始化后面几个node
 			p.prevNode[i] = 0
 		}
 		p.maxHeight = h
 	}
 
+	// 计算 key 的偏移量
 	kvOffset := len(p.kvData)
+	// 追加key 到kvdata
 	p.kvData = append(p.kvData, key...)
+	// 追加 value 到kvdata
 	p.kvData = append(p.kvData, value...)
-	// Node
+
+	// 计算node 在nodedata 的索引
 	node := len(p.nodeData)
+	// 把node元数据追加到nodeData中, 元数据 offset,keylen,valuelen,height
 	p.nodeData = append(p.nodeData, kvOffset, len(key), len(value), h)
+
+	// i 表示 跳表的level, l0,l1,l2等等, n表示level对应的 prevnode索引位置
 	for i, n := range p.prevNode[:h] {
+
+		// 获取每个level的next ndoe 索引
 		m := n + nNext + i
+
+		// 把当前的node next node 指向 prevnode 的next node
 		p.nodeData = append(p.nodeData, p.nodeData[m])
+		// 当前prevnode next 指向当前节点
 		p.nodeData[m] = node
+
+		//  是一个简单 链表节点插入操作，prev, node
+		// node->next = prev->next
+		// prev->next = node
 	}
 
 	p.kvSize += len(key) + len(value)
@@ -323,6 +358,7 @@ func (p *DB) Put(key []byte, value []byte) error {
 // the DB does not contain the key.
 //
 // It is safe to modify the contents of the arguments after Delete returns.
+// 仅删除索引数据，不会再kvdata中删除任何数据, 这样好处就是快, 在skiplist 已经检索不到改节点了
 func (p *DB) Delete(key []byte) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -332,9 +368,22 @@ func (p *DB) Delete(key []byte) error {
 		return ErrNotFound
 	}
 
+	// 获取当前节点的高度
 	h := p.nodeData[node+nHeight]
+
 	for i, n := range p.prevNode[:h] {
+		// i表示当前level，即高度. 获取当前level的prevnode 索引
 		m := n + nNext + i
+
+		// 相当于 prev->next = node->next
+		// nodeData[preNode+nNext+i] 表示prev node的next ,因为nodedata 定义
+		// 0: offset
+		// 1: keylen
+		// 2: vaulelen
+		// 3: height
+		// 4: level0:next node
+		// 5: level1:next node
+		// .... leveln :next node
 		p.nodeData[m] = p.nodeData[p.nodeData[m]+nNext+i]
 	}
 
