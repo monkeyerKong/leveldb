@@ -59,7 +59,7 @@ func (db *DB) writeJournal(batches []*Batch, seq uint64, sync bool) error {
 func (db *DB) rotateMem(n int, wait bool) (mem *memDB, err error) {
 	retryLimit := 3
 retry:
-	// Wait for pending memdb compaction.
+	// Wait for pending memdb compaction. 向cCmd 类型channal 发送消息, 并等待合并完成
 	err = db.compTriggerWait(db.mcompCmdC)
 	if err != nil {
 		return
@@ -80,8 +80,10 @@ retry:
 
 	// Schedule memdb compaction.
 	if wait {
+		// 阻塞合并, 在进行写Key的时候，非阻塞，例如：Put(key []byte, value []byte)
 		err = db.compTriggerWait(db.mcompCmdC)
 	} else {
+		// 不阻塞合并
 		db.compTrigger(db.mcompCmdC)
 	}
 	return
@@ -180,7 +182,7 @@ func (db *DB) writeLocked(batch, ourBatch *Batch, merge, sync bool) error {
 	// if it is too fast and compaction cannot catch-up.
 
 	// 获取mdb内存表，表是一个sstable file skiplist，一个有两个skiplist ,sstable file skiplist， 一个是sstable block skiplist。
-	// mdbFree: 表空闲大小, db.flush 会自动对db.ref 进行 ++操作，
+	// mdbFree: 表空闲大小, db.flush 会自动对mdb.ref 进行 ++操作，
 	mdb, mdbFree, err := db.flush(batch.internalLen)
 	if err != nil {
 		db.unlockWrite(false, 0, err)
@@ -270,13 +272,15 @@ func (db *DB) writeLocked(batch, ourBatch *Batch, merge, sync bool) error {
 			// 写内存失败，直接panic， 而写journal日志失败处理方式是报错
 			panic(err)
 		}
+		// 增加seq计数为b.Len()
 		seq += uint64(batch.Len())
 	}
 
-	// Incr seq number.
+	// Incr seq number. 写完日志和内存后，增加seq计数器
 	db.addSeq(uint64(batchesLen(batches)))
 
-	// Rotate memdb if it's reach the threshold.
+	// Rotate memdb if it's reach the threshold. ,这个逻辑是写完数据后，判断内存的容量是否超过了空闲空间, 而不是在开头进行check
+	// 写操作在容量不足的情况的下，进行了rotate
 	if batch.internalLen >= mdbFree {
 		if _, err := db.rotateMem(0, false); err != nil {
 			db.unlockWrite(overflow, merged, err)

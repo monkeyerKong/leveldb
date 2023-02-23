@@ -155,6 +155,7 @@ func openDB(s *session) (*DB, error) {
 	} else {
 		db.closeW.Add(2)
 		go db.tCompaction()
+		// 单独一个go thread 做内存的合并
 		go db.mCompaction()
 		// go db.jWriter()
 	}

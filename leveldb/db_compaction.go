@@ -266,6 +266,7 @@ func (db *DB) compactionCommit(name string, rec *sessionRecord) {
 	}, nil)
 }
 
+// 内存超过阈值时，申请一个frozen mem table, 即一个skiplist
 func (db *DB) memCompaction() {
 	mdb := db.getFrozenMem()
 	if mdb == nil {
@@ -684,6 +685,7 @@ type cCmd interface {
 
 type cAuto struct {
 	// Note for table compaction, an non-empty ackC represents it's a compaction waiting command.
+	// 仅写的channal
 	ackC chan<- error
 }
 
@@ -723,18 +725,24 @@ func (db *DB) compTrigger(compC chan<- cCmd) {
 func (db *DB) compTriggerWait(compC chan<- cCmd) (err error) {
 	ch := make(chan error)
 	defer close(ch)
+
 	// Send cmd.
 	select {
+	// 写合并信号, 如果cCmp channel有其未处理的合并请求，当前则阻塞
+	// go db.mCompaction() 来接收合并请求 执行合并, db.go->openDB()方法执行的时候，就启动了一个go thread 监听 合并消息，处理内存合并任务
 	case compC <- cAuto{ch}:
 	case err = <-db.compErrC:
 		return
+
 	case <-db.closeC:
 		return ErrClosed
 	}
 	// Wait cmd.
 	select {
+	// 等待合并结束或者错误
 	case err = <-ch:
 	case err = <-db.compErrC:
+		// 数据库关闭信号
 	case <-db.closeC:
 		return ErrClosed
 	}
@@ -783,8 +791,11 @@ func (db *DB) mCompaction() {
 		case x = <-db.mcompCmdC:
 			switch x.(type) {
 			case cAuto:
+				// 内存合并(压缩)执行任务
 				db.memCompaction()
+				//  任务完成，在compTriggerWait 函数中在wait 这个error chan
 				x.ack(nil)
+				// free 临时对象x , x是一个error chan
 				x = nil
 			default:
 				panic("leveldb: unknown command")
