@@ -36,14 +36,18 @@ type dbIter struct {
 }
 
 func (i *dbIter) fill(checkStart, checkLimit bool) bool {
+	// 就是填充key, value
 	if i.node != 0 {
 		n := i.p.nodeData[i.node]
 		m := n + i.p.nodeData[i.node+nKey]
+		// 取出kye
 		i.key = i.p.kvData[n:m]
 		if i.slice != nil {
+			// 设置了start
 			switch {
 			case checkLimit && i.slice.Limit != nil && i.p.cmp.Compare(i.key, i.slice.Limit) >= 0:
 				fallthrough
+				//查找的key 比start 的key 小，则设置node =0
 			case checkStart && i.slice.Start != nil && i.p.cmp.Compare(i.key, i.slice.Start) < 0:
 				i.node = 0
 				goto bail
@@ -72,8 +76,10 @@ func (i *dbIter) First() bool {
 	i.p.mu.RLock()
 	defer i.p.mu.RUnlock()
 	if i.slice != nil && i.slice.Start != nil {
+		// 设置start , 则skiplist查找 start (key)的即next node，
 		i.node, _ = i.p.findGE(i.slice.Start, false)
 	} else {
+		// 没有设置start，则skiplist 中的第一个 node
 		i.node = i.p.nodeData[nNext]
 	}
 	return i.fill(false, true)
@@ -91,6 +97,7 @@ func (i *dbIter) Last() bool {
 	if i.slice != nil && i.slice.Limit != nil {
 		i.node = i.p.findLT(i.slice.Limit)
 	} else {
+		// level0 的最后一个节点
 		i.node = i.p.findLast()
 	}
 	return i.fill(true, false)
@@ -127,6 +134,7 @@ func (i *dbIter) Next() bool {
 	i.forward = true
 	i.p.mu.RLock()
 	defer i.p.mu.RUnlock()
+	// 取下一个节点
 	i.node = i.p.nodeData[i.node+nNext]
 	return i.fill(false, true)
 }
@@ -146,6 +154,7 @@ func (i *dbIter) Prev() bool {
 	i.forward = false
 	i.p.mu.RLock()
 	defer i.p.mu.RUnlock()
+	// 取prev node
 	i.node = i.p.findLT(i.key)
 	return i.fill(true, false)
 }
@@ -224,8 +233,10 @@ func (p *DB) randHeight() (h int) {
 }
 
 // Must hold RW-lock if prev == true, as it use shared prevNode slice.
+// 注意：内部方法，不可直接使用，非线程安全
 func (p *DB) findGE(key []byte, prev bool) (int, bool) {
 	node := 0
+	//从skiplist 的最高level开始遍历
 	h := p.maxHeight - 1
 	for {
 		next := p.nodeData[node+nNext+h]
@@ -235,43 +246,56 @@ func (p *DB) findGE(key []byte, prev bool) (int, bool) {
 			cmp = p.cmp.Compare(p.kvData[o:o+p.nodeData[next+nKey]], key)
 		}
 		if cmp < 0 {
-			// Keep searching in this list
+			// Keep searching in this list, 在当前level 中向后遍历
 			node = next
 		} else {
 			if prev {
+				// 遍历当前level 链表的时候，保存每个next 的prev node
 				p.prevNode[h] = node
+				// 在level0上 找到了 节点
 			} else if cmp == 0 {
 				return next, true
 			}
+			// 找到了最后一层, 判断是否找到节点
 			if h == 0 {
 				return next, cmp == 0
 			}
+			// 调到下一层
 			h--
 		}
 	}
 }
 
+// 找到 key的 prev 节点
+// 注意：内部方法，不可直接使用，非线程安全
 func (p *DB) findLT(key []byte) int {
 	node := 0
+	// 从skiplist 的最高level开始遍历
 	h := p.maxHeight - 1
 	for {
+		// 找到next node索引
 		next := p.nodeData[node+nNext+h]
+		// 定位到next node
 		o := p.nodeData[next]
 		if next == 0 || p.cmp.Compare(p.kvData[o:o+p.nodeData[next+nKey]], key) >= 0 {
 			if h == 0 {
 				break
 			}
+			// 调到下一层
 			h--
 		} else {
+			// 向后遍历
 			node = next
 		}
 	}
 	return node
 }
 
+// 注意：内部方法，不可直接使用，非线程安全
 func (p *DB) findLast() int {
 	node := 0
 	h := p.maxHeight - 1
+	// 也是一样，从走最高层一直找到最后一层level0，取node
 	for {
 		next := p.nodeData[node+nNext+h]
 		if next == 0 {
@@ -396,6 +420,7 @@ func (p *DB) Delete(key []byte) error {
 //
 // It is safe to modify the contents of the arguments after Contains returns.
 func (p *DB) Contains(key []byte) bool {
+	// 对外提供的方法，保证线程安全
 	p.mu.RLock()
 	_, exact := p.findGE(key, false)
 	p.mu.RUnlock()
@@ -410,6 +435,7 @@ func (p *DB) Contains(key []byte) bool {
 func (p *DB) Get(key []byte) (value []byte, err error) {
 	p.mu.RLock()
 	if node, exact := p.findGE(key, false); exact {
+		// 这种单纯的查找，不操作prevnode
 		o := p.nodeData[node] + p.nodeData[node+nKey]
 		value = p.kvData[o : o+p.nodeData[node+nVal]]
 	} else {
@@ -425,6 +451,7 @@ func (p *DB) Get(key []byte) (value []byte, err error) {
 //
 // The caller should not modify the contents of the returned slice, but
 // it is safe to modify the contents of the argument after Find returns.
+// 返回k，v, 在skiplist
 func (p *DB) Find(key []byte) (rkey, value []byte, err error) {
 	p.mu.RLock()
 	if node, _ := p.findGE(key, false); node != 0 {
