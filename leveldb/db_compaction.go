@@ -167,22 +167,28 @@ func (db *DB) compactionTransact(name string, t compactionTransactInterface) {
 		backoffMul = 2 * time.Second
 	)
 	var (
-		backoff  = backoffMin
+		backoff = backoffMin
+		// 定义ticker
 		backoffT = time.NewTimer(backoff)
-		lastCnt  = compactionTransactCounter(0)
+		// 定义自增计数
+		lastCnt = compactionTransactCounter(0)
 
+		// 定义个关闭compaction的标志
 		disableBackoff = db.s.o.GetDisableCompactionBackoff()
 	)
 	for n := 0; ; n++ {
 		// Check whether the DB is closed.
+		//db 已经关闭，则退出
 		if db.isClosed() {
 			db.logf("%s exiting", name)
 			db.compactionExitTransact()
+			// 重试, 非第一次处理
 		} else if n > 0 {
 			db.logf("%s retrying N·%d", name, n)
 		}
 
 		// Execute.
+		// 计数器
 		cnt := compactionTransactCounter(0)
 		err := t.run(&cnt)
 		if err != nil {
@@ -190,6 +196,7 @@ func (db *DB) compactionTransact(name string, t compactionTransactInterface) {
 		}
 
 		// Set compaction error status.
+		// 接收压缩过程中出现的错误信息
 		select {
 		case db.compErrSetC <- err:
 		case perr := <-db.compPerErrC:
@@ -199,8 +206,10 @@ func (db *DB) compactionTransact(name string, t compactionTransactInterface) {
 			}
 		case <-db.closeC:
 			db.logf("%s exiting", name)
+			// 直接panic
 			db.compactionExitTransact()
 		}
+		// 压缩正常，则直接退出
 		if err == nil {
 			return
 		}
@@ -212,6 +221,7 @@ func (db *DB) compactionTransact(name string, t compactionTransactInterface) {
 		if !disableBackoff {
 			// Reset backoff duration if counter is advancing.
 			if cnt > lastCnt {
+				// ticker 增长策略 1,2,4,8 后面都是按照最大的8 去做ticker
 				backoff = backoffMin
 				lastCnt = cnt
 			}
@@ -287,6 +297,7 @@ func (db *DB) memCompaction() {
 	// Pause table compaction.
 	resumeC := make(chan struct{})
 	select {
+	// 写入一个table的挂起信号
 	case db.tcompPauseC <- (chan<- struct{})(resumeC):
 	case <-db.compPerErrC:
 		close(resumeC)
