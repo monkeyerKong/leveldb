@@ -103,6 +103,7 @@ type FileDesc struct {
 	Num  int64
 }
 
+// 4种类型文件，mainfest, journal, table, temp
 func (fd FileDesc) String() string {
 	switch fd.Type {
 	case TypeManifest:

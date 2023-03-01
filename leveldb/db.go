@@ -49,7 +49,7 @@ type DB struct {
 	s *session
 
 	// MemDB.
-	memMu           sync.RWMutex
+	memMu           sync.RWMutex // 内存数据库读写锁
 	memPool         chan *memdb.DB
 	mem, frozenMem  *memDB
 	journal         *journal.Writer
@@ -73,10 +73,10 @@ type DB struct {
 	tr           *Transaction
 
 	// Compaction.
-	compCommitLk     sync.Mutex
-	tcompCmdC        chan cCmd
-	tcompPauseC      chan chan<- struct{}
-	mcompCmdC        chan cCmd
+	compCommitLk     sync.Mutex           // compation 锁
+	tcompCmdC        chan cCmd            //表压缩 channel
+	tcompPauseC      chan chan<- struct{} // 表压缩 pause channel
+	mcompCmdC        chan cCmd            // 内存压缩channel
 	compErrC         chan error
 	compPerErrC      chan error
 	compErrSetC      chan error
@@ -101,13 +101,13 @@ func openDB(s *session) (*DB, error) {
 		// MemDB
 		memPool: make(chan *memdb.DB, 1),
 		// Snapshot
-		snapsList: list.New(),
-		// Write
+		snapsList:    list.New(),
 		batchPool:    sync.Pool{New: newBatch},
 		writeMergeC:  make(chan writeMerge),
 		writeMergedC: make(chan bool),
 		writeLockC:   make(chan struct{}, 1),
 		writeAckC:    make(chan error),
+
 		// Compaction
 		tcompCmdC:   make(chan cCmd),
 		tcompPauseC: make(chan chan<- struct{}),
@@ -145,7 +145,10 @@ func openDB(s *session) (*DB, error) {
 	}
 
 	// Doesn't need to be included in the wait group.
+
+	// 启动一个线程，做compaction的错误处理，内部通过阻塞等待信号
 	go db.compactionError()
+	//
 	go db.mpoolDrain()
 
 	if readOnly {
@@ -154,8 +157,10 @@ func openDB(s *session) (*DB, error) {
 		}
 	} else {
 		db.closeW.Add(2)
+		// 单独一个线程 做表的compaction
 		go db.tCompaction()
-		// 单独一个go thread 做内存的合并
+
+		// 单独一个线程 当内存(memdb)达到checkpoint点，需要做compaction, 可以叫做minor compaction
 		go db.mCompaction()
 		// go db.jWriter()
 	}

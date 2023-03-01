@@ -59,7 +59,7 @@ func (db *DB) writeJournal(batches []*Batch, seq uint64, sync bool) error {
 func (db *DB) rotateMem(n int, wait bool) (mem *memDB, err error) {
 	retryLimit := 3
 retry:
-	// Wait for pending memdb compaction. 向cCmd 类型channal 发送消息, 并等待合并完成
+	// Wait for pending memdb compaction. 向cCmd channal 发送消息, 并等待合并完成
 	err = db.compTriggerWait(db.mcompCmdC)
 	if err != nil {
 		return
@@ -280,7 +280,7 @@ func (db *DB) writeLocked(batch, ourBatch *Batch, merge, sync bool) error {
 	db.addSeq(uint64(batchesLen(batches)))
 
 	// Rotate memdb if it's reach the threshold. ,这个逻辑是写完数据后，判断内存的容量是否超过了空闲空间, 而不是在开头进行check
-	// 写操作在容量不足的情况的下，进行了rotate
+	// 判断是否达到checkpoint点，如果达到了则需要rotate
 	if batch.internalLen >= mdbFree {
 		if _, err := db.rotateMem(0, false); err != nil {
 			db.unlockWrite(overflow, merged, err)

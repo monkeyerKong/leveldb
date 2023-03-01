@@ -66,6 +66,7 @@ func (b *Buffer) Reset() {
 // tryGrowByReslice is a inlineable version of grow for the fast-case where the
 // internal buffer only needs to be resliced.
 // It returns the index where bytes should be written and whether it succeeded.
+// 判断buf是否需要扩容，当n比剩余空间大的时候，需要扩容，比剩余空间小的时候，重置buf,是容量恰好可以容纳新追加字节的长度
 func (b *Buffer) tryGrowByReslice(n int) (int, bool) {
 	if l := len(b.buf); n <= cap(b.buf)-l {
 		b.buf = b.buf[:l+n]
@@ -84,9 +85,11 @@ func (b *Buffer) grow(n int) int {
 		b.Reset()
 	}
 	// Try to grow by means of a reslice.
+	// 重置后再次判断是否需要扩容，不需要则直接返回. buffer当前的offset
 	if i, ok := b.tryGrowByReslice(n); ok {
 		return i
 	}
+	// buf 未初始化，重新初始化，返回buffer offset
 	if b.buf == nil && n <= smallBufferSize {
 		b.buf = make([]byte, n, smallBufferSize)
 		return 0
@@ -101,6 +104,7 @@ func (b *Buffer) grow(n int) int {
 	} else if c > maxInt-c-n {
 		panic(bytes.ErrTooLarge)
 	} else {
+		// 扩容
 		// Not enough space anywhere, we need to allocate.
 		buf := makeSlice(2*c + n)
 		copy(buf, b.buf[b.off:])

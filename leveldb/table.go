@@ -384,6 +384,7 @@ func (t *tOps) createFrom(src iterator.Iterator) (f *tFile, n int, err error) {
 	}()
 
 	for src.Next() {
+		/* 持续变量memdb，把节点(kv)通过tablewrite 持续写入 */
 		err = w.append(src.Key(), src.Value())
 		if err != nil {
 			return
@@ -395,6 +396,10 @@ func (t *tOps) createFrom(src iterator.Iterator) (f *tFile, n int, err error) {
 	}
 
 	n = w.tw.EntriesLen()
+	/*
+		补充后续的元数据
+		sstable的元数据包括：（1）文件编码（2）大小（3）最大key值（4）最小key值
+	*/
 	f, err = w.finish()
 	return
 }
@@ -532,19 +537,27 @@ func newTableOps(s *session) *tOps {
 type tWriter struct {
 	t *tOps
 
-	fd storage.FileDesc
-	w  storage.Writer
-	tw *table.Writer
+	fd storage.FileDesc // 文件描述符对象
+	w  storage.Writer   // 具有sync ,close, write 方法的实现
+	tw *table.Writer    // table write 对象
 
+	/*
+		note: 因为key 在sstable 是严格排序的
+			first记录的最小值
+			last 记录最大值
+	*/
 	first, last []byte
 }
 
 // Append key/value pair to the table.
 func (w *tWriter) append(key, value []byte) error {
+	// 记录最小key
 	if w.first == nil {
 		w.first = append([]byte(nil), key...)
 	}
+	// 记录最大key
 	w.last = append(w.last[:0], key...)
+	/* 调用tablewrite.append 方法 */
 	return w.tw.Append(key, value)
 }
 

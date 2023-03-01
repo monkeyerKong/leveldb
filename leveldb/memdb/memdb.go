@@ -119,6 +119,7 @@ func (i *dbIter) Seek(key []byte) bool {
 	return i.fill(false, true)
 }
 
+// 顺着当前的level，去下一个节点
 func (i *dbIter) Next() bool {
 	if i.Released() {
 		i.err = ErrIterReleased
@@ -134,7 +135,7 @@ func (i *dbIter) Next() bool {
 	i.forward = true
 	i.p.mu.RLock()
 	defer i.p.mu.RUnlock()
-	// 取下一个节点
+	// 在当前level取下一个节点, 基本上这个level 都是 level0
 	i.node = i.p.nodeData[i.node+nNext]
 	return i.fill(false, true)
 }

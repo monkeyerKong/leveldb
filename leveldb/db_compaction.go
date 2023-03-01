@@ -151,12 +151,14 @@ type compactionTransactInterface interface {
 
 func (db *DB) compactionTransact(name string, t compactionTransactInterface) {
 	defer func() {
+		// 捕获 compactionExitTransact 抛出的异常
 		if x := recover(); x != nil {
 			if x == errCompactionTransactExiting {
 				if err := t.revert(); err != nil {
 					db.logf("%s revert error %q", name, err)
 				}
 			}
+			// 抛出 非compactionExitTransact 抛出的异常,
 			panic(x)
 		}
 	}()
@@ -276,7 +278,7 @@ func (db *DB) compactionCommit(name string, rec *sessionRecord) {
 	}, nil)
 }
 
-// 内存超过阈值时，申请一个frozen mem table, 即一个skiplist
+// 达到checkpoint,做内存compaction
 func (db *DB) memCompaction() {
 	mdb := db.getFrozenMem()
 	if mdb == nil {
@@ -297,8 +299,9 @@ func (db *DB) memCompaction() {
 	// Pause table compaction.
 	resumeC := make(chan struct{})
 	select {
-	// 写入一个table的挂起信号
+	// 先发送一个恢复信号
 	case db.tcompPauseC <- (chan<- struct{})(resumeC):
+		// 在做mem 的capaction的时候，出现了db close  或者 compaction 的错误，则异常处理
 	case <-db.compPerErrC:
 		close(resumeC)
 		resumeC = nil
@@ -782,6 +785,7 @@ func (db *DB) compTriggerRange(compC chan<- cCmd, level int, min, max []byte) (e
 	return err
 }
 
+// 达到checkpoint点,会将当前memtable冻结成一个不可更改的内存数据库（immutable memory db）
 func (db *DB) mCompaction() {
 	var x cCmd
 
@@ -802,7 +806,7 @@ func (db *DB) mCompaction() {
 		case x = <-db.mcompCmdC:
 			switch x.(type) {
 			case cAuto:
-				// 内存合并(压缩)执行任务
+				// 收到内存合并消息(压缩), 执行任务
 				db.memCompaction()
 				//  任务完成，在compTriggerWait 函数中在wait 这个error chan
 				x.ack(nil)
