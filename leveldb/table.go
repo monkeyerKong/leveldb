@@ -384,7 +384,7 @@ func (t *tOps) createFrom(src iterator.Iterator) (f *tFile, n int, err error) {
 	}()
 
 	for src.Next() {
-		/* 持续变量memdb，把节点(kv)通过tablewrite 持续写入 */
+		/* 持续遍历memdb，把skiplist节点(kv)通过tablewrite 以blocksize 大小持续写入sstable中 */
 		err = w.append(src.Key(), src.Value())
 		if err != nil {
 			return
@@ -395,6 +395,7 @@ func (t *tOps) createFrom(src iterator.Iterator) (f *tFile, n int, err error) {
 		return
 	}
 
+	// n 表示 写入到sstable的 kv 数量
 	n = w.tw.EntriesLen()
 	/*
 		补充后续的元数据
@@ -580,6 +581,7 @@ func (w *tWriter) close() error {
 // Finalizes the table and returns table file.
 func (w *tWriter) finish() (f *tFile, err error) {
 	defer func() {
+		// 关闭sstable文件
 		if cerr := w.close(); cerr != nil {
 			if err == nil {
 				err = cerr
@@ -588,6 +590,7 @@ func (w *tWriter) finish() (f *tFile, err error) {
 			}
 		}
 	}()
+	// table write 收尾
 	err = w.tw.Close()
 	if err != nil {
 		return

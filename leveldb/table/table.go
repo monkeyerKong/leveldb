@@ -154,6 +154,7 @@ const (
 )
 
 type blockHandle struct {
+	// length 的长度包括compression type(1-btype), crc(4-byte)
 	offset, length uint64
 }
 

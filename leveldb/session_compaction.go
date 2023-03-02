@@ -32,6 +32,7 @@ func (s *session) flushMemdb(rec *sessionRecord, mdb *memdb.DB, maxLevel int) (i
 	// Create sorted table.
 	iter := mdb.NewIterator(nil)
 	defer iter.Release()
+	// n表示写入sstable文件kv的数量
 	t, n, err := s.tops.createFrom(iter)
 	if err != nil {
 		return 0, err

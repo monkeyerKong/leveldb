@@ -98,7 +98,7 @@ type blockWriter struct {
 
 				三组entry按上图的格式进行存储。值得注意的是restart_interval为2，因此每隔两个entry都会有一条数据作为restart point点的数据项，存储完整key值。因此entry3存储了完整的key
 	*/
-	scratch []byte // datablock
+	scratch []byte // datablock的entry一部分，包含shared、noshared、value三个部分
 }
 
 func (w *blockWriter) append(key, value []byte) (err error) {
@@ -133,7 +133,7 @@ func (w *blockWriter) append(key, value []byte) (err error) {
 	}
 	// 记录当前key
 	w.prevKey = append(w.prevKey[:0], key...)
-	// entry 项自增
+	// block 内entry, 即kv 计数器 自增
 	w.nEntries++
 	return nil
 }
@@ -149,6 +149,7 @@ func (w *blockWriter) append(key, value []byte) (err error) {
 	restart points        ╲ restart points length
 
 	尾部数据记录了每一个restart point的值，以及所有restart point的个数。
+	内容都写在datawirte的buf中
 */
 func (w *blockWriter) finish() error {
 	// Write restarts entry.
@@ -177,6 +178,8 @@ func (w *blockWriter) bytesLen() int {
 	if restartsLen == 0 {
 		restartsLen = 1
 	}
+	// 每一个restart point 占用4个字节，通过restart.buf4 = w.buf.alloc(4) , 最后一个4表示 restartlen 也占用4个字节
+	// 一个block块至少 有一个 restart ponit + restart points length
 	return w.buf.Len() + 4*restartsLen + 4
 }
 
@@ -250,7 +253,7 @@ type Writer struct {
 	//  └──────┴──────────────────┴──────────────────┘
 
 	/*  data 部分描述
-	┌─────────────────┐
+	   ┌─────────────────┐
 	┌─■│  entry01        │
 	│  ├─────────────────┤
 	│  │  entry02        │■─┐
@@ -266,7 +269,7 @@ type Writer struct {
 	indexBlock  blockWriter  // index block中用来存储每个data block的索引信息
 	filterBlock filterWriter //来存储一些过滤器相关的数据（布隆过滤器), 如果设置了有数据，没有设置则无数据
 	pendingBH   blockHandle  //记录了上一个dataBlock的索引信息(偏移量，长度), blockhandle
-	offset      uint64       // 上一个datablock的偏移量
+	offset      uint64       // 记录sstable中的总字节数, 也会当做上一个block的偏移量
 	nEntries    int          // kv 键值对的个数, kv 会被封装在entry结构里
 	// Scratch allocated enough for 5 uvarint. Block writer should not use
 	// first 20-bytes since it will be used to encode block handle, which
@@ -282,6 +285,9 @@ datablock:
 	┌──────────────────┬──────────────────┬─────────────┐
 	│    datablock     │ compression type │     crc     │
 	└──────────────────┴──────────────────┴─────────────┘
+	compression type: 占用 1字节
+	crc : 占用 4字节
+
 */
 func (w *Writer) writeBlock(buf *util.Buffer, compression opt.Compression) (bh blockHandle, err error) {
 	// Compress the buffer if necessary.
@@ -297,6 +303,7 @@ func (w *Writer) writeBlock(buf *util.Buffer, compression opt.Compression) (bh b
 		b[n] = blockTypeSnappyCompression
 	} else {
 		tmp := buf.Alloc(blockTrailerLen)
+		// 压缩type,占用1字节
 		tmp[0] = blockTypeNoCompression
 		b = buf.Bytes()
 	}
@@ -312,18 +319,29 @@ func (w *Writer) writeBlock(buf *util.Buffer, compression opt.Compression) (bh b
 		return
 	}
 	bh = blockHandle{w.offset, uint64(len(b) - blockTrailerLen)}
+	// 记录当前的offset, 供后面的block使用,
 	w.offset += uint64(len(b))
 	return
 }
 
+/*
+把datablock 写入sstable文件后，会记录block handle值, 且需要完成对data block的index block 信息构造。
+构造完index block 后，重置block handle, 和datablock 中的 prev key, 因为datablock 结构体的生命周期由blocksize定，
+每完成一次datablock size 大小的block，都需要重置datablock结构体
+*/
 func (w *Writer) flushPendingBH(key []byte) error {
+
+	// 判断是否有data block 写入sstable文件中，==0 表示没有
 	if w.pendingBH.length == 0 {
 		return nil
 	}
+
 	var separator []byte
 	if len(key) == 0 {
+		// 收尾工作，写入最后一块datablock，触发这里,假如prev key = pick, 则那么separator = q
 		separator = w.cmp.Successor(w.comparerScratch[:0], w.dataBlock.prevKey)
 	} else {
+		// 正常迭代写入key和value, 假设prev key = pick, key = pity, 那么separator = pid
 		separator = w.cmp.Separator(w.comparerScratch[:0], w.dataBlock.prevKey, key)
 	}
 	if separator == nil {
@@ -331,28 +349,55 @@ func (w *Writer) flushPendingBH(key []byte) error {
 	} else {
 		w.comparerScratch = separator
 	}
+	// 前 20个字节，用于保存 block handle, n = 写入tail偏移量
 	n := encodeBlockHandle(w.scratch[:20], w.pendingBH)
+
 	// Append the block handle to the index block.
+	/*
+		   index block entry
+		        ╱
+
+		      ┌───────────────────────┬──────────────┬──────────────┐
+		      │  data block max key   │    offset    │    length    │
+		      └───────────────────────┴──────────────┴──────────────┘
+		                                      │              │
+		                                      │  block       │
+		                                      └──handle──────┘
+		                                                    ╲
+		                                                     ╲─────╲
+		                                                            ╲
+		                                                            data block index
+			separator: data block max key, 即block中最大的key, index block entry 中的key
+			w.scratch[:n]: block handle, offset 和 length, index block entry 中的value
+
+	*/
+	// index block entry 保存在w.indexBlock.buf中
 	if err := w.indexBlock.append(separator, w.scratch[:n]); err != nil {
 		return err
 	}
-	// Reset prev key of the data block.
+	// Reset prev key of the data block. datablock 信息已经记录在 index block中了，需要重置prev key, 进行一下data block
 	w.dataBlock.prevKey = w.dataBlock.prevKey[:0]
 	// Clear pending block handle.
 	w.pendingBH = blockHandle{}
 	return nil
 }
 
+// 收尾：写入datablock 的 restart point信息, 并重置datablock
 func (w *Writer) finishBlock() error {
+	// 追加restart point 尾巴
 	if err := w.dataBlock.finish(); err != nil {
 		return err
 	}
+	//以block buffer为单位 追加到sstable，并返回block handle，存有当前block 在sstable 的offset 及block 的长度
 	bh, err := w.writeBlock(&w.dataBlock.buf, w.compression)
 	if err != nil {
 		return err
 	}
+
+	// 记录当前的block 的handle，包括offset, length
 	w.pendingBH = bh
-	// Reset the data block.
+	// Reset the data block.清空block.buffer,kv计数器,restart ponit 列表, 但是保留block的prevkey
+	// 并没有 清除prev key, 主要因为在构建index block 时用到，用于填充 index block entry的max key
 	w.dataBlock.reset()
 	// Flush the filter block.
 	w.filterBlock.flush(w.offset)
@@ -374,9 +419,9 @@ datablock 完整的结构
 	┌─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┬───────┬─────┬─────┬─────┬──────┬───────┌──────┬──────┬──────┐
 	│  0  │  4  │  4  │dick │miss │  2  │  2  │  6  │ ss  │wonder │  0  │  6  │  2  │locker│  no   │  0   │  22  │  2   │
 	└─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┴───────┴─────┴─────┴─────┴──────┴───────└──────┴──────┴──────┘
-	│                       │     │                        │      │                         │          │      │      ╲
-	│                       │     │                        │      │                         │          │      │       ╲─╲
-	└──────entry1───────────┘     └─────────entry2─────────┘      └───────────entry3────────┘      restart points        ╲ restart points length
+		│                       │     │                        │      │                         │          │      │      ╲
+		│                       │     │                        │      │                         │          │      │       ╲─╲
+		└──────entry1───────────┘     └─────────entry2─────────┘      └───────────entry3────────┘      restart points        ╲ restart points length
 
 */
 func (w *Writer) Append(key, value []byte) error {
@@ -389,6 +434,7 @@ func (w *Writer) Append(key, value []byte) error {
 		return w.err
 	}
 
+	// 完成index block 信息构造，重置datablock 的 prevkey, 及block handle,准备构建下一个data block
 	if err := w.flushPendingBH(key); err != nil {
 		return err
 	}
@@ -406,6 +452,7 @@ func (w *Writer) Append(key, value []byte) error {
 			return w.err
 		}
 	}
+	// sstable层面的 kv 计数器
 	w.nEntries++
 	return nil
 }
@@ -422,6 +469,7 @@ func (w *Writer) BlocksLen() int {
 
 // EntriesLen returns number of entries added so far.
 func (w *Writer) EntriesLen() int {
+	// sstable有多少个kv
 	return w.nEntries
 }
 
@@ -440,6 +488,7 @@ func (w *Writer) Close() error {
 			// We need to Reset() so that the offset = 0, resulting
 			// in buf.Bytes() returning the whole allocated bytes.
 			w.dataBlock.buf.Reset()
+			// 把buf 重新丢回 sync.pool
 			w.bpool.Put(w.dataBlock.buf.Bytes())
 		}
 	}()
@@ -450,12 +499,15 @@ func (w *Writer) Close() error {
 
 	// Write the last data block. Or empty data block if there
 	// aren't any data blocks at all.
+	// datablock收尾工作, 不够一个datablock size 的datablock 及，最后未写入到sstable的数据
+	// 并不会填充000...这些值，保障最后一个block也是4k
 	if w.dataBlock.nEntries > 0 || w.nEntries == 0 {
 		if err := w.finishBlock(); err != nil {
 			w.err = err
 			return w.err
 		}
 	}
+	// 写入最后的index block，清空block handle, datablock prev key
 	if err := w.flushPendingBH(nil); err != nil {
 		return err
 	}
@@ -489,10 +541,28 @@ func (w *Writer) Close() error {
 		return w.err
 	}
 
+	/*
+			index block 的key 和value 如下图:
+			   index block entry
+			               ╲                  Key                  ┌────value─────┐
+			                ╲──╲               │                   │              │
+			                    ╲              │                   │              │
+			                     ╲ ┌───────────────────────┬──────────────┬──────────────┐
+			                       │  data block max key   │    offset    │    length    │
+			                       └───────────────────────┴──────────────┴──────────────┘
+			                                                       │              │
+			                                                       │  block       │
+			                                                       └──handle──────┘
+
+		index block 结构 同data block
+	*/
+
 	// Write the index block.
+	// 写入最后的restart 字段
 	if err := w.indexBlock.finish(); err != nil {
 		return err
 	}
+	// 追加index block 到sstable
 	indexBH, err := w.writeBlock(&w.indexBlock.buf, w.compression)
 	if err != nil {
 		w.err = err
