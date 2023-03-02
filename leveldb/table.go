@@ -591,6 +591,7 @@ func (w *tWriter) finish() (f *tFile, err error) {
 		}
 	}()
 	// table write 收尾
+
 	err = w.tw.Close()
 	if err != nil {
 		return

@@ -481,6 +481,16 @@ func (w *Writer) BytesLen() int {
 // Close will finalize the table. Calling Append is not possible
 // after Close, but calling BlocksLen, EntriesLen and BytesLen
 // is still possible.
+/*
+	1. 写最后的datablck 到sstable文件
+	2. 写入indexblock 到sstable文件
+	3. 写入最后的filterblock 到sstable文件
+	4. 组织footer结构，并写入到sstable文件
+		4.1: 写入meta index
+		4.2 : 写入index block index
+		4.3 : 写入magic
+	5. 计算sstalbe 字节长度
+*/
 func (w *Writer) Close() error {
 	defer func() {
 		if w.bpool != nil {
@@ -570,6 +580,19 @@ func (w *Writer) Close() error {
 	}
 
 	// Write the table footer.
+	/*
+
+		   footer ╲
+		           ╲──╲
+		               ╲
+		                ╲
+		             ┌─────────────┬──────────────────┬──────────────┐
+		             │ meta index  │index block index │    magic     │
+		             └─────────────┴──────────────────┴──────────────┘
+		meta index: 指的元数据索引在sstable 的位置, 结构都是blockhandle, offset + length
+		index block index: 指的index索引在sstable 的位置
+		magic: 内容为："http://code.google.com/p/leveldb/"字符串sha1哈希的前8个字节。
+	*/
 	footer := w.scratch[:footerLen]
 	for i := range footer {
 		footer[i] = 0
@@ -581,6 +604,7 @@ func (w *Writer) Close() error {
 		w.err = err
 		return w.err
 	}
+	// 加上 footer的长度
 	w.offset += footerLen
 
 	w.err = errors.New("leveldb/table: writer is closed")
