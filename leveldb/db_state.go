@@ -176,6 +176,9 @@ func (db *DB) getMems() (e, f *memDB) {
 }
 
 // Get effective memdb.
+/*
+	memdb 操作需要锁保护, 如果memdb 不是nil memdb.ref ++, 否则返回nil
+*/
 func (db *DB) getEffectiveMem() *memDB {
 	db.memMu.RLock()
 	defer db.memMu.RUnlock()

@@ -127,22 +127,41 @@ type Batch struct {
 }
 
 func (b *Batch) grow(n int) {
+
+	// n : key type (1 byte) + 保留空间(5 byte) + keylen + 保留空间(5 byte) + value length
+
+	//当前batch data 的大小
 	o := len(b.data)
+	// batch.data的free 空间容量不足
 	if cap(b.data)-o < n {
+		// 设置batch 的 空间上限
 		limit := batchGrowLimit
 		if b.growLimit > 0 {
 			limit = b.growLimit
 		}
+		// 扩容因子, 根据batch.index 和 空间limit，比较调整因子
 		div := 1
+
+		// 如果索引的长度 超过 空间上限
 		if len(b.index) > limit {
+			// 倍数调整扩容因子div, b.index 容量越大，扩容的速度也就越慢
 			div = len(b.index) / limit
 		}
+		// 扩容因子
+		// div = 1 的时候，扩容的容量 = 2 * old data + n
+		// div = 2 的时候，扩容的容量 = 1.5 * old data + n
+		// div = 3 的时候，扩容的容量 = 1.25 * old data + n
+
 		ndata := make([]byte, o, o+n+o/div)
 		copy(ndata, b.data)
 		b.data = ndata
 	}
 }
 
+// appendRec 以batch 格式封装kv，并分别append 到 batch.data 和 batch.index 缓存中
+/*
+内存操作，leveldb 基本都是用append方法
+*/
 func (b *Batch) appendRec(kt keyType, key, value []byte) {
 	n := 1 + binary.MaxVarintLen32 + len(key)
 
@@ -150,7 +169,7 @@ func (b *Batch) appendRec(kt keyType, key, value []byte) {
 	if kt == keyTypeVal {
 		n += binary.MaxVarintLen32 + len(value)
 	}
-	// 判断batch 是否需要扩容， 一条记录长度 > batchGrowLimit 时， 需要扩容
+	// 扩容, 且具有 slow down 特性的扩容
 	b.grow(n)
 
 	//构建索引的内容 : index: [(keyType->keyPos->keyLen->key->valuePos->valueLen->value),(...)]
@@ -168,6 +187,7 @@ func (b *Batch) appendRec(kt keyType, key, value []byte) {
 	// data[2] = key, key的值
 	// data[3] = valueLen, value长度
 	// data[4] = value, value的值
+	// keyType 1 字节长度
 	data[o] = byte(kt)
 
 	o++

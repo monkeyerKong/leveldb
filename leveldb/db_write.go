@@ -56,6 +56,7 @@ func (db *DB) writeJournal(batches []*Batch, seq uint64, sync bool) error {
 	return nil
 }
 
+// 通知后台compaction mem 进程做 checkpoint, 把mem 以迭代的方式写入到sstable中
 func (db *DB) rotateMem(n int, wait bool) (mem *memDB, err error) {
 	retryLimit := 3
 retry:
@@ -93,24 +94,31 @@ func (db *DB) flush(n int) (mdb *memDB, mdbFree int, err error) {
 	delayed := false
 	slowdownTrigger := db.s.o.GetWriteL0SlowdownTrigger()
 	pauseTrigger := db.s.o.GetWriteL0PauseTrigger()
+
+	// 定义flush闭包函数
 	flush := func() (retry bool) {
 		mdb = db.getEffectiveMem()
 		if mdb == nil {
 			err = ErrClosed
 			return false
 		}
+		// 因为调用getEffectiveMem, 会导致ref 自增，仅在retry=true,即mdb不可用情况下，内部ref--, 其他情况都需要外部ref --
 		defer func() {
 			if retry {
 				mdb.decref()
 				mdb = nil
 			}
 		}()
+
 		tLen := db.s.tLen(0)
+
+		// skiplist 的data buffer 的 空闲空间
 		mdbFree = mdb.Free()
 		switch {
 		case tLen >= slowdownTrigger && !delayed:
 			delayed = true
 			time.Sleep(time.Millisecond)
+			// 当前空闲空间足够
 		case mdbFree >= n:
 			return false
 		case tLen >= pauseTrigger:
@@ -124,10 +132,11 @@ func (db *DB) flush(n int) (mdb *memDB, mdbFree int, err error) {
 				return false
 			}
 		default:
-			// Allow memdb to grow if it has no entry.
+			// Allow memdb to grow if it has no entry., memdb 为空的时候
 			if mdb.Len() == 0 {
 				mdbFree = n
 			} else {
+				// 当前空闲容量不够，需要做一次checkpoint
 				mdb.decref()
 				mdb, err = db.rotateMem(n, false)
 				if err == nil {
