@@ -602,6 +602,7 @@ func (w *tWriter) finish() (f *tFile, err error) {
 			return
 		}
 	}
+	// f.seekLeft 是一个关键指标，用于控制错峰compaction
 	f = newTableFile(w.fd, int64(w.tw.BytesLen()), internalKey(w.first), internalKey(w.last))
 	return
 }
