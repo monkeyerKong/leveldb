@@ -34,9 +34,11 @@ type DB struct {
 	seq uint64
 
 	// Stats. Need 64-bit alignment.
-	cWriteDelay            int64 // The cumulative duration of write delays
-	cWriteDelayN           int32 // The cumulative number of write delays
-	inWritePaused          int32 // The indicator whether write operation is paused by compaction
+	cWriteDelay   int64 // The cumulative duration of write delays
+	cWriteDelayN  int32 // The cumulative number of write delays
+	inWritePaused int32 // The indicator whether write operation is paused by compaction
+
+	// aliveSnaps 活动快照的数量
 	aliveSnaps, aliveIters int32
 
 	// Compaction statistic
@@ -763,18 +765,24 @@ func (db *DB) recoverJournalRO() error {
 	return nil
 }
 
+// 从skiplist中检索key
 func memGet(mdb *memdb.DB, ikey internalKey, icmp *iComparer) (ok bool, mv []byte, err error) {
+	// find 返回返回 k和v
 	mk, mv, err := mdb.Find(ikey)
 	if err == nil {
+		// 解析用户的key
 		ukey, _, kt, kerr := parseInternalKey(mk)
 		if kerr != nil {
 			// Shouldn't have had happen.
 			panic(kerr)
 		}
+		// 比例两个key是否相等
 		if icmp.uCompare(ukey, ikey.ukey()) == 0 {
+			// 再次判断key的类型是否标记了删除
 			if kt == keyTypeDel {
 				return true, nil, ErrNotFound
 			}
+			// 返回value
 			return true, mv, nil
 
 		}
@@ -785,6 +793,7 @@ func memGet(mdb *memdb.DB, ikey internalKey, icmp *iComparer) (ok bool, mv []byt
 }
 
 func (db *DB) get(auxm *memdb.DB, auxt tFiles, key []byte, seq uint64, ro *opt.ReadOptions) (value []byte, err error) {
+	// seq 为当前最新的seq
 	ikey := makeInternalKey(nil, key, seq, keyTypeSeek)
 
 	if auxm != nil {
@@ -793,7 +802,13 @@ func (db *DB) get(auxm *memdb.DB, auxt tFiles, key []byte, seq uint64, ro *opt.R
 		}
 	}
 
+	// 获取 mutalbe memdb, inmutalbe memdb
 	em, fm := db.getMems()
+	/*
+		1. 从memdb中检索key, 检索到返回
+		2. 从immutable memdb 中检索key, 检索到返回
+		3. 按低层至高层的顺序在level i层的sstable文件中查找指定的key, 检索到返回，未检索到not found
+	*/
 	for _, m := range [...]*memDB{em, fm} {
 		if m == nil {
 			continue
@@ -801,11 +816,20 @@ func (db *DB) get(auxm *memdb.DB, auxt tFiles, key []byte, seq uint64, ro *opt.R
 		defer m.decref()
 
 		if ok, mv, me := memGet(m.DB, ikey, db.s.icmp); ok {
+			// 找到直接返回，
 			return append([]byte(nil), mv...), me
 		}
 	}
 
 	v := db.s.version()
+	/*
+		leveldb在每一层sstable中查找数据时，都是按序依次查找sstable的,
+		1. 0层比较特殊，因为有重复的key，所以从文件号最大的文件开始检索。因为是最新的
+		2. 非0层文件，一层中所有文件之间的key不重合，因此leveldb可以借助sstable的元数据，及在index block index 会保存block 的max key，可以快速定位key在哪个block中
+			定为到具体block，可以通过restart point 可以快速定位key在哪个entry里面
+
+	*/
+
 	value, cSched, err := v.get(auxt, ikey, ro, false)
 	v.release()
 	if cSched {
@@ -870,8 +894,25 @@ func (db *DB) Get(key []byte, ro *opt.ReadOptions) (value []byte, err error) {
 		return
 	}
 
+	// 创建一个快照
 	se := db.acquireSnapshot()
+	// 删除快照
 	defer db.releaseSnapshot(se)
+	// 基于快照的seq 去读取, 查找left key(小于等于seq的key), 每一个序列号，其实就代表着leveldb的一个状态
+	/*
+
+				                           ┌──────────────┬──────────────┬──────────────┐
+			                               │   seq:100    │  key:"key1"  │    delete    │
+			                               ├──────────────┼──────────────┼──────────────┤
+			  current req                  │    seq:99    │  key:"key1"  │ value:"dog"  │
+			         ╲                     ├──────────────┼──────────────┼──────────────┤
+			          ╲────╲               │    seq:98    │  key:"key1"  │ value:"cat"  │
+			                ╲              └──────────────┴──────────────┴──────────────┘
+			            ┌──────────┐
+			            │  seq:98  │
+			            └──────────┘
+		用户在序列号为98的时刻创建了一个快照，并且基于该快照读取key为“key1”的数据时，即便此刻用户将"key1"的值修改为"dog"，再删除，用户读取到的内容仍然是“cat”
+	*/
 	return db.get(nil, nil, key, se.seq, ro)
 }
 

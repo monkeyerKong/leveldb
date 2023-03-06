@@ -493,8 +493,7 @@ func (w *Writer) Next() (io.Writer, error) {
 	// 判断是否填充journal 日志的头
 	if w.pending {
 
-		// 一个journal journal[block,block1,...blockn]
-		// 一个block 是32k  block[(chunk, chunk1),..., (chunkn)]
+		// 一个journal journal[chunk,chunk1,...chunkn], chunk 大小32k
 		// 填充日志的头 journal chunk header
 		// chunk[0..4] = checksum
 		// chunk[5..6] = data Length

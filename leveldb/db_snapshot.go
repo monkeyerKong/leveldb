@@ -19,40 +19,54 @@ import (
 )
 
 type snapshotElement struct {
-	seq uint64
-	ref int
-	e   *list.Element
+	seq uint64        // 用一个seq来代表一个数据库状态。
+	ref int           // 快照引用计数
+	e   *list.Element // 双向链表元素指针
 }
 
 // Acquires a snapshot, based on latest sequence.
+// 在leveldb中，用户对同一个key的若干次修改（包括删除）是以维护多条数据项的方式进行存储的（直至进行compaction时才会合并成同一条记录），
+// 每条数据项都会被赋予一个序列号，代表这条数据项的新旧状态。一条数据项的序列号越大，表示其中代表的内容为最新值。
 func (db *DB) acquireSnapshot() *snapshotElement {
 	db.snapsMu.Lock()
 	defer db.snapsMu.Unlock()
 
+	// 获取当前db 最新的seq
 	seq := db.getSeq()
 
+	// 查看当前db 是否有old(历史)快照
 	if e := db.snapsList.Back(); e != nil {
 		se := e.Value.(*snapshotElement)
+		// 如果有old(历史)的快照，判断old 快照的seq 和当前db 的seq是否相等
 		if se.seq == seq {
+			// 快照引用计数自增
 			se.ref++
+			// 返回
 			return se
 		} else if seq < se.seq {
+			// 如果出现最新的seq 没有 old 快照的seq 大,肯定是逻辑上的bug了
 			panic("leveldb: sequence number is not increasing")
 		}
 	}
+	// 在快照列表中未发现当前seq的快照
 	se := &snapshotElement{seq: seq, ref: 1}
+	// 把快照对象添加双向链表尾部
 	se.e = db.snapsList.PushBack(se)
 	return se
 }
 
-// Releases given snapshot element.
+// Releases given snapshot element. 从快照列表中删除快照
 func (db *DB) releaseSnapshot(se *snapshotElement) {
+	// 整个快照表锁
 	db.snapsMu.Lock()
 	defer db.snapsMu.Unlock()
 
+	// 引用计数自减
 	se.ref--
 	if se.ref == 0 {
+		// 待引用计数 =0， 删除快照节点
 		db.snapsList.Remove(se.e)
+		//释放节点内存
 		se.e = nil
 	} else if se.ref < 0 {
 		panic("leveldb: Snapshot: negative element reference")
@@ -99,6 +113,7 @@ func (snap *Snapshot) String() string {
 //
 // The caller should not modify the contents of the returned slice, but
 // it is safe to modify the contents of the argument after Get returns.
+// 根据快照的seq 去根据key 返回value
 func (snap *Snapshot) Get(key []byte, ro *opt.ReadOptions) (value []byte, err error) {
 	snap.mu.RLock()
 	defer snap.mu.RUnlock()

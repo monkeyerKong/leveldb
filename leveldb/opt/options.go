@@ -23,23 +23,23 @@ const (
 
 var (
 	DefaultBlockCacher                   = LRUCacher
-	DefaultBlockCacheCapacity            = 8 * MiB
-	DefaultBlockRestartInterval          = 16
-	DefaultBlockSize                     = 4 * KiB
+	DefaultBlockCacheCapacity            = 8 * MiB // block cache 默认大小 8MiB
+	DefaultBlockRestartInterval          = 16      // sstable 文件block内的 restart ponit 的间隔定义，默认为 16, 每隔16 个entry, 保存一次完整的key
+	DefaultBlockSize                     = 4 * KiB // sstable 文件块大小定义，默认值 4k
 	DefaultCompactionExpandLimitFactor   = 25
 	DefaultCompactionGPOverlapsFactor    = 10
-	DefaultCompactionL0Trigger           = 4
+	DefaultCompactionL0Trigger           = 4 // 当0层文件数量大于CompactionL0Trigger,会触发major compaction, 默认值 为4
 	DefaultCompactionSourceLimitFactor   = 1
 	DefaultCompactionTableSize           = 2 * MiB
 	DefaultCompactionTableSizeMultiplier = 1.0
-	DefaultCompactionTotalSize           = 10 * MiB
+	DefaultCompactionTotalSize           = 10 * MiB // 当i层文件总大小大于 CompactionTotalSize, 会触发major compaction, ,默认值: 10MiB
 	DefaultCompactionTotalSizeMultiplier = 10.0
-	DefaultCompressionType               = SnappyCompression
+	DefaultCompressionType               = SnappyCompression // block 的默认压缩算法
 	DefaultIteratorSamplingRate          = 1 * MiB
 	DefaultOpenFilesCacher               = LRUCacher
 	DefaultWriteBuffer                   = 4 * MiB
-	DefaultWriteL0PauseTrigger           = 12
-	DefaultWriteL0SlowdownTrigger        = 8
+	DefaultWriteL0PauseTrigger           = 12 // 0层文件数量PauseTrigger 默认值, 意义，0层文件大于PauseTrigger 则不能写入，需要等Major compaction 完成才可以
+	DefaultWriteL0SlowdownTrigger        = 8  // 0层文件数量SlowdownTrigger 默认值, 意义：0层文件大于SlowdownTrigger 则写入速度减慢
 	DefaultFilterBaseLg                  = 11
 	DefaultMaxManifestFileSize           = int64(64 * MiB)
 )
@@ -78,16 +78,16 @@ func (p *passthroughCacher) New(capacity int) cache.Cacher {
 //
 // Shared cache example:
 //
-//     fileCache := opt.NewLRU(500)
-//     blockCache := opt.NewLRU(8 * opt.MiB)
-// 	   options := &opt.Options{
-//         OpenFilesCacher: fileCache,
-//         BlockCacher: blockCache,
-//     }
-//     db1, err1 := leveldb.OpenFile("path/to/db1", options)
-//     ...
-//     db2, err2 := leveldb.OpenFile("path/to/db2", options)
-//     ...
+//	    fileCache := opt.NewLRU(500)
+//	    blockCache := opt.NewLRU(8 * opt.MiB)
+//		   options := &opt.Options{
+//	        OpenFilesCacher: fileCache,
+//	        BlockCacher: blockCache,
+//	    }
+//	    db1, err1 := leveldb.OpenFile("path/to/db1", options)
+//	    ...
+//	    db2, err2 := leveldb.OpenFile("path/to/db2", options)
+//	    ...
 func PassthroughCacher(x cache.Cacher) Cacher {
 	return &passthroughCacher{x}
 }
@@ -670,6 +670,7 @@ func (o *Options) GetWriteBuffer() int {
 	return o.WriteBuffer
 }
 
+// GetWriteL0PauseTrigger  获取写入暂停的触发值
 func (o *Options) GetWriteL0PauseTrigger() int {
 	if o == nil || o.WriteL0PauseTrigger == 0 {
 		return DefaultWriteL0PauseTrigger
@@ -677,6 +678,7 @@ func (o *Options) GetWriteL0PauseTrigger() int {
 	return o.WriteL0PauseTrigger
 }
 
+// GetWriteL0SlowdownTrigger 获取写入减速的触发值
 func (o *Options) GetWriteL0SlowdownTrigger() int {
 	if o == nil || o.WriteL0SlowdownTrigger == 0 {
 		return DefaultWriteL0SlowdownTrigger

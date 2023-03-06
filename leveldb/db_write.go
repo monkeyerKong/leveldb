@@ -49,7 +49,7 @@ func (db *DB) writeJournal(batches []*Batch, seq uint64, sync bool) error {
 		return err
 	}
 	if sync {
-		// 可以看得出，单次请求(单次/批量)操作，就会做做一次flush，及刷盘一次，这快mysql 有一个参数sync_binlog 可以控制redo log 的刷新方式，如果sync_binlog =1 的时候，也是这种方式
+		// 可以看得出，单次请求(单次/批量)操作，就会做做一次flush，及刷盘一次，这快mysql 有一个参数sync_binlog 可以控制binlog 的刷新方式，如果sync_binlog =1 的时候，也是这种方式
 		// 底层实现就是调用os.fsync(), 立即刷缓存内容到磁盘
 		return db.journalWriter.Sync()
 	}
@@ -90,6 +90,8 @@ retry:
 	return
 }
 
+// 获取有效的mdb对象，及空闲内存的大小，如果空闲空间不足，则需要做checkpoint
+// n: 表示写入mdb 数据量大小
 func (db *DB) flush(n int) (mdb *memDB, mdbFree int, err error) {
 	delayed := false
 	slowdownTrigger := db.s.o.GetWriteL0SlowdownTrigger()
@@ -115,12 +117,14 @@ func (db *DB) flush(n int) (mdb *memDB, mdbFree int, err error) {
 		// skiplist 的data buffer 的 空闲空间
 		mdbFree = mdb.Free()
 		switch {
+		// 0层文件数量大于等于slowdownTrigger , 触发写减速
 		case tLen >= slowdownTrigger && !delayed:
 			delayed = true
 			time.Sleep(time.Millisecond)
 			// 当前空闲空间足够
 		case mdbFree >= n:
 			return false
+			// 0层文件数量大于等于 pauseTrigger, 触发写暂停
 		case tLen >= pauseTrigger:
 			delayed = true
 			// Set the write paused flag explicitly.
