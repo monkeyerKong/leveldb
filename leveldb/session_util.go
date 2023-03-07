@@ -242,6 +242,7 @@ func (s *session) refLoop() {
 			r <- ref
 
 		case <-s.closeC:
+			// 关闭session waitGroup
 			s.closeW.Done()
 			return
 		}
@@ -270,7 +271,9 @@ func (s *session) setVersion(r *sessionRecord, v *version) {
 	// Hold by session. It is important to call this first before releasing
 	// current version, otherwise the still used files might get released.
 	v.incref()
+	// 已被初始化
 	if s.stVersion != nil {
+		// 追加session record
 		if r != nil {
 			var (
 				added   = make([]int64, 0, len(r.addedTables))

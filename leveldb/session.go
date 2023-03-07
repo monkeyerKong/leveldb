@@ -36,7 +36,7 @@ func newErrManifestCorrupted(fd storage.FileDesc, field, reason string) error {
 // session represent a persistent database session.
 type session struct {
 	// Need 64-bit alignment.
-	stNextFileNum    int64 // current unused file number
+	stNextFileNum    int64 // current unused file number, 指的sstable 的文件号
 	stJournalNum     int64 // current journal file number; need external synchronization
 	stPrevJournalNum int64 // prev journal file number; no longer used; for compatibility with older version of leveldb
 	stTempFileNum    int64
@@ -91,6 +91,7 @@ func newSession(stor storage.Storage, o *opt.Options) (s *session, err error) {
 
 	s.closeW.Add(1)
 	go s.refLoop()
+	// 新建version，没有session record, version 仅包含session 句柄，id, nid
 	s.setVersion(nil, newVersion(s))
 	s.log("log@legend F·NumFile S·FileSize N·Entry C·BadEntry B·BadBlock Ke·KeyError D·DroppedEntry L·Level Q·SeqNum T·TimeElapsed")
 	return
@@ -111,6 +112,7 @@ func (s *session) close() {
 
 	// Close all background goroutines
 	close(s.closeC)
+	//对应到 refloop 事件循环
 	s.closeW.Wait()
 }
 
@@ -137,11 +139,13 @@ func (s *session) recover() (err error) {
 		}
 	}()
 
+	//fd 是最新的Manifest文件, 即元数据文件
 	fd, err := s.stor.GetMeta()
 	if err != nil {
 		return
 	}
 
+	// filestore.open()打开元数据文件
 	reader, err := s.stor.Open(fd)
 	if err != nil {
 		return
@@ -152,6 +156,7 @@ func (s *session) recover() (err error) {
 		// Options.
 		strict = s.o.GetStrict(opt.StrictManifest)
 
+		// journal reader
 		jr      = journal.NewReader(reader, dropper{s, fd}, strict, true)
 		rec     = &sessionRecord{}
 		staging = s.stVersion.newStaging()

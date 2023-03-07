@@ -363,6 +363,7 @@ func (v *version) computeCompaction() {
 	statScore := make([]string, len(v.levels))
 	statTotSize := int64(0)
 
+	// 如果level0 和 非level 0 同时达到了需要做major compaction, 需要先做高level 的 major的 compaction
 	for level, tables := range v.levels {
 		var score float64
 		size := tables.size()
@@ -402,6 +403,7 @@ func (v *version) computeCompaction() {
 	v.s.logf("version@stat F·%v S·%s%v Sc·%v", statFiles, shortenb(statTotSize), statSizes, statScore)
 }
 
+// cScore 大于等于1 或者 cSeek 不为nil 则需要返回ture
 func (v *version) needCompaction() bool {
 	return v.cScore >= 1 || atomic.LoadPointer(&v.cSeek) != nil
 }

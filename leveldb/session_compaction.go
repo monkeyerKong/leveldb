@@ -67,15 +67,21 @@ func (s *session) pickCompaction() *compaction {
 	if v.cScore >= 1 {
 		sourceLevel = v.cLevel
 		cptr := s.getCompPtr(sourceLevel)
+
+		// level i 层所有的tables
 		tables := v.levels[sourceLevel]
+		// 非level 0 层 处理
 		if cptr != nil && sourceLevel > 0 {
 			n := len(tables)
+			// 找到最大的key所有在table 的索引
 			if i := sort.Search(n, func(i int) bool {
 				return s.icmp.Compare(tables[i].imax, cptr) > 0
 			}); i < n {
+				// 找到最大key的table，追加到目标t0
 				t0 = append(t0, tables[i])
 			}
 		}
+		// level 0 直接 取 第一个table, 非level0 如果没有找到也取第一个table
 		if len(t0) == 0 {
 			t0 = append(t0, tables[0])
 		}
@@ -95,6 +101,7 @@ func (s *session) pickCompaction() *compaction {
 			return nil
 		}
 	}
+	// 三种compaction: level 0， 非level0， seek
 
 	return newCompaction(s, v, sourceLevel, t0, typ)
 }
