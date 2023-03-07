@@ -483,6 +483,7 @@ func (o *Options) GetCompactionGPOverlaps(level int) int {
 	return o.GetCompactionTableSize(level+2) * factor
 }
 
+// GetCompactionL0Trigger 获取0层文件触发major compaction条件
 func (o *Options) GetCompactionL0Trigger() int {
 	if o == nil || o.CompactionL0Trigger == 0 {
 		return DefaultCompactionL0Trigger
@@ -498,6 +499,14 @@ func (o *Options) GetCompactionSourceLimit(level int) int {
 	return o.GetCompactionTableSize(level+1) * factor
 }
 
+//GetCompactionTableSize 根据level i 定义每层的文件size
+/*
+默认如下：
+	level 0: 1MiB
+	level 1: 10MiB
+	level 2: 10MiB
+	level 7: 10MiB
+*/
 func (o *Options) GetCompactionTableSize(level int) int {
 	var (
 		base = DefaultCompactionTableSize
@@ -519,6 +528,15 @@ func (o *Options) GetCompactionTableSize(level int) int {
 	return int(float64(base) * mult)
 }
 
+// GetCompactionTotalSize  定义i层总文件大小触发major compaction条件
+/*
+默认：
+	level 0: 	10MiB
+	level 1:	100MiB
+	level 2: 	10* 100MiB 1GiB
+	level 7: 	不限制
+
+*/
 func (o *Options) GetCompactionTotalSize(level int) int64 {
 	var (
 		base = DefaultCompactionTotalSize

@@ -281,6 +281,7 @@ func (db *DB) compactionCommit(name string, rec *sessionRecord) {
 // 达到checkpoint,做内存compaction
 func (db *DB) memCompaction() {
 	mdb := db.getFrozenMem()
+	// 如果当前没有immutable mem, 则不做 mem compaction
 	if mdb == nil {
 		return
 	}
@@ -299,7 +300,7 @@ func (db *DB) memCompaction() {
 	// Pause table compaction.
 	resumeC := make(chan struct{})
 	select {
-	// 先发送一个恢复信号
+	// 先挂起通道发送恢复信号
 	case db.tcompPauseC <- (chan<- struct{})(resumeC):
 		// 在做mem 的capaction的时候，出现了db close  或者 compaction 的错误，则异常处理
 	case <-db.compPerErrC:
@@ -567,6 +568,7 @@ func (b *tableCompactionBuilder) revert() error {
 	return nil
 }
 
+// major compaaction 具体实现
 func (db *DB) tableCompaction(c *compaction, noTrivial bool) {
 	defer c.release()
 
@@ -785,7 +787,7 @@ func (db *DB) compTriggerRange(compC chan<- cCmd, level int, min, max []byte) (e
 	return err
 }
 
-// 达到checkpoint点,会将当前memtable冻结成一个不可更改的内存数据库（immutable memory db）
+// 后台线程 达到checkpoint点,会将当前memtable冻结成一个不可更改的内存数据库（immutable memory db）
 func (db *DB) mCompaction() {
 	var x cCmd
 
@@ -821,6 +823,7 @@ func (db *DB) mCompaction() {
 	}
 }
 
+// 后台线程，做major compaction
 func (db *DB) tCompaction() {
 	var (
 		x     cCmd

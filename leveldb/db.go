@@ -76,8 +76,8 @@ type DB struct {
 
 	// Compaction.
 	compCommitLk     sync.Mutex           // compation 锁
-	tcompCmdC        chan cCmd            //表压缩 channel
-	tcompPauseC      chan chan<- struct{} // 表压缩 pause channel
+	tcompCmdC        chan cCmd            // major compaction 信号
+	tcompPauseC      chan chan<- struct{} // table compaction 挂起信号
 	mcompCmdC        chan cCmd            // 内存压缩channel
 	compErrC         chan error
 	compPerErrC      chan error
@@ -111,7 +111,7 @@ func openDB(s *session) (*DB, error) {
 		writeAckC:    make(chan error),
 
 		// Compaction
-		tcompCmdC:   make(chan cCmd),
+		tcompCmdC:   make(chan cCmd), // tcompCmdC major compaction 信号, 阻塞式
 		tcompPauseC: make(chan chan<- struct{}),
 		mcompCmdC:   make(chan cCmd),
 		compErrC:    make(chan error),

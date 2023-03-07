@@ -352,6 +352,7 @@ func (v *version) pickMemdbLevel(umin, umax []byte, maxLevel int) (level int) {
 	return
 }
 
+// 判断是否需要需要 major compaction
 func (v *version) computeCompaction() {
 	// Precomputed best level for next compaction
 	bestLevel := int(-1)
@@ -377,8 +378,10 @@ func (v *version) computeCompaction() {
 			// file size is small (perhaps because of a small write-buffer
 			// setting, or very high compression ratios, or lots of
 			// overwrites/deletions).
+			// level 0层文件数超过预定的上限
 			score = float64(len(tables)) / float64(v.s.o.GetCompactionL0Trigger())
 		} else {
+			// 非 level 0 文件的总大小超过(10 * 10 ^ i) MB
 			score = float64(size) / float64(v.s.o.GetCompactionTotalSize(level))
 		}
 

@@ -17,8 +17,11 @@ import (
 
 const (
 	undefinedCompaction = iota
+	// 0 层 compaction 类型
 	level0Compaction
+	// 非0 层 compaction 类型
 	nonLevel0Compaction
+	// seek =0 compaction 类型
 	seekCompaction
 )
 
@@ -54,6 +57,7 @@ func (s *session) flushMemdb(rec *sessionRecord, mdb *memdb.DB, maxLevel int) (i
 }
 
 // Pick a compaction based on current state; need external synchronization.
+// 通过判断 version.cScore的得分大于1 或者 通过 version.cSeek 不为空，判断是否做major compaction
 func (s *session) pickCompaction() *compaction {
 	v := s.version()
 
