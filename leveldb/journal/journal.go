@@ -383,18 +383,18 @@ func (w *Writer) fillHeader(last bool) {
 	}
 	if last {
 		if w.first {
-			// 一条记录在一个block 只有一个chunk ，则为full
+			// 一条记录在仅有一个chunk ，则为full
 			w.buf[w.i+6] = fullChunkType
 		} else {
-			// 一条记录在一个block 有多个chunk, 且当前是最后一个chunk ，则为last
+			// 一条记录在分布在多个chunk, 且当前是最后一个chunk ，则为last
 			w.buf[w.i+6] = lastChunkType
 		}
 	} else {
 		if w.first {
-			// 一条记录在一个block 有多个chunk, 且当前是第一个chunk ，则为first
+			// 一条记录分布在多个chunk, 且当前是第一个chunk ，则为first
 			w.buf[w.i+6] = firstChunkType
 		} else {
-			// 一条记录在一个block 有多个chunk, 且当前是中间几个chunk的一个 ，则为middle
+			// 一条记录分布在多个chunk, 且当前是中间几个chunk的一个 ，则为middle
 			w.buf[w.i+6] = middleChunkType
 		}
 	}

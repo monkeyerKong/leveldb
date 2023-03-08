@@ -112,7 +112,7 @@ func (s *session) close() {
 
 	// Close all background goroutines
 	close(s.closeC)
-	//对应到 refloop 事件循环
+	//对应到 refloop() 事件循环
 	s.closeW.Wait()
 }
 
@@ -187,6 +187,9 @@ func (s *session) recover() (err error) {
 			}
 			s.logf("manifest error: %v (skipped)", errors.SetFd(err, fd))
 		}
+		// 仅需要重置 comptr, addtables, deletetables 就可以了。
+		// 因为第一个条session record 和 其他的session record 是有区别的。第一条记录了leveldb的全量版本信息，其余若干条Session Record仅记录每次更迭的变化情况
+
 		rec.resetCompPtrs()
 		rec.resetAddedTables()
 		rec.resetDeletedTables()

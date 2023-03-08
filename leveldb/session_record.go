@@ -35,33 +35,41 @@ const (
 )
 
 type cpRecord struct {
-	level int
-	ikey  internalKey
+	level int         // 哪一层level
+	ikey  internalKey // ?是最大key 还是最小key
 }
 
+// 新增sstable record信息
 type atRecord struct {
-	level int
-	num   int64
-	size  int64
-	imin  internalKey
-	imax  internalKey
+	level int         // sstable 在哪一层level
+	num   int64       // sstable 文件号
+	size  int64       // 文件大小
+	imin  internalKey // 文件最小key
+	imax  internalKey // 文件最大key
 }
 
+// 删除sstable record信息
 type dtRecord struct {
-	level int
-	num   int64
+	level int   //sstable 在哪一层level
+	num   int64 //sstable 文件号
 }
 
 type sessionRecord struct {
-	hasRec         int
-	comparer       string
-	journalNum     int64
-	prevJournalNum int64
-	nextFileNum    int64
-	seqNum         uint64
-	compPtrs       []cpRecord
-	addedTables    []atRecord
-	deletedTables  []dtRecord
+	/*
+		hasRec掩码标志位：
+			┌─────────────────┬──────────────────┬───────────┬───────────┬───────────┬───────────┬───────────────┬────────────────┬───────────┐
+			│recPrevJournalNum│ Large Value Ref  │recAddTable│recDelTable│recCompPtr │ recSeqNum │recNextFileNum │ recJournalNum  │recComparer│
+			└─────────────────┴──────────────────┴───────────┴───────────┴───────────┴───────────┴───────────────┴────────────────┴───────────┘
+	*/
+	hasRec         int        // session record 的掩码
+	comparer       string     // compaprer名称
+	journalNum     int64      //最新的journal文件的序号
+	prevJournalNum int64      // 上一个journal文件序号
+	nextFileNum    int64      // 下一个sstable 文件序号
+	seqNum         uint64     // 数据库已经持久化数据项中最大的sequence number
+	compPtrs       []cpRecord // compaction pointers
+	addedTables    []atRecord // 新增sstable 文件信息
+	deletedTables  []dtRecord // 删除sstable 文件信息
 
 	scratch [binary.MaxVarintLen64]byte
 	err     error
@@ -101,6 +109,7 @@ func (p *sessionRecord) addCompPtr(level int, ikey internalKey) {
 	p.compPtrs = append(p.compPtrs, cpRecord{level, ikey})
 }
 
+// 清除compaction pointers内容及掩码标志位
 func (p *sessionRecord) resetCompPtrs() {
 	p.hasRec &= ^(1 << recCompPtr)
 	p.compPtrs = p.compPtrs[:0]
@@ -115,6 +124,7 @@ func (p *sessionRecord) addTableFile(level int, t *tFile) {
 	p.addTable(level, t.fd.Num, t.size, t.imin, t.imax)
 }
 
+// 清除add tables内容及掩码标志位
 func (p *sessionRecord) resetAddedTables() {
 	p.hasRec &= ^(1 << recAddTable)
 	p.addedTables = p.addedTables[:0]
@@ -125,6 +135,7 @@ func (p *sessionRecord) delTable(level int, num int64) {
 	p.deletedTables = append(p.deletedTables, dtRecord{level, num})
 }
 
+// 清除delete tables内容及掩码标志位
 func (p *sessionRecord) resetDeletedTables() {
 	p.hasRec &= ^(1 << recDelTable)
 	p.deletedTables = p.deletedTables[:0]
@@ -195,6 +206,16 @@ func (p *sessionRecord) encode(w io.Writer) error {
 	return p.err
 }
 
+// 读取Manifest session record  Uvarint 部分内容
+/*
+比如：
+	┌────────────────────┬──────────────────────────┬────────────────────┐
+	│   Type=KComparer   │  kComparer Name Length   │   KComparer Name   │
+	│     (Varint32)     │        (Varint32)        │      (String)      │
+	└────────────────────┴──────────────────────────┴────────────────────┘
+
+读取的是Type=KComparer  或者 kComparer Name Length  返回它们的值. 如果是EOF 错误处理
+*/
 func (p *sessionRecord) readUvarintMayEOF(field string, r io.ByteReader, mayEOF bool) uint64 {
 	if p.err != nil {
 		return 0
@@ -225,15 +246,29 @@ func (p *sessionRecord) readVarint(field string, r io.ByteReader) int64 {
 	return x
 }
 
+/*
+返回字节序, 即Manifest session record  字符串部分
+比如：
+
+	┌────────────────────┬──────────────────────────┬────────────────────┐
+	│   Type=KComparer   │  kComparer Name Length   │   KComparer Name   │
+	│     (Varint32)     │        (Varint32)        │      (String)      │
+	└────────────────────┴──────────────────────────┴────────────────────┘
+
+返回的就是KComparer Name
+*/
 func (p *sessionRecord) readBytes(field string, r byteReader) []byte {
 	if p.err != nil {
 		return nil
 	}
+	// 读filed 长度
 	n := p.readUvarint(field, r)
 	if p.err != nil {
 		return nil
 	}
+	// 申请 filed长度个空间
 	x := make([]byte, n)
+	// 从r(reader)中读取filed 名字,保存在x中
 	_, p.err = io.ReadFull(r, x)
 	if p.err != nil {
 		if p.err == io.ErrUnexpectedEOF {
@@ -255,6 +290,50 @@ func (p *sessionRecord) readLevel(field string, r io.ByteReader) int {
 	return int(x)
 }
 
+/*
+Manifest session record文件格式:
+
+	┌────────────────────┬──────────────────────────┬────────────────────┐
+	│   Type=KComparer   │  kComparer Name Length   │   KComparer Name   │
+	│     (Varint32)     │        (Varint32)        │      (String)      │
+	├────────────────────┼──────────────────────────┼────────────────────┘
+	│  Type=KLogNumber   │        Log Number        │
+	│     (Varint32)     │        (Varint64)        │
+	├────────────────────┼──────────────────────────┤
+	│Type=KPrevLogNumber │     Prev Log Number      │
+	│     (Varint32)     │        (Varint64)        │
+	├────────────────────┼──────────────────────────┤
+	│Type=KNextFileNumber│     Next File Number     │
+	│     (Varint32)     │        (Varint64)        │
+	├────────────────────┼──────────────────────────┤
+	│ Type=KLastSequence │   Last Sequence Number   │
+	│     (Varint32)     │        (Varint64)        │
+	├────────────────────┼──────────────────────────┼────────────────────┬──────────────────────────┐
+	│Type=KComparerPointe│          Level           │Internal Key Length │       Internal Key       │
+	│         r          │        (Varint32)        │     (Varint64)     │         (String)         │
+	├────────────────────┴──────────────────────────┴────────────────────┴──────────────────────────┤
+	│                                              ...                                              │
+	│                                                                                               │
+	├────────────────────┬──────────────────────────┬────────────────────┬──────────────────────────┤
+	│Type=KComparerPointe│          Level           │Internal Key Length │       Internal Key       │
+	│         r          │        (Varint32)        │     (Varint64)     │         (String)         │
+	├────────────────────┼──────────────────────────┼────────────────────┼──────────────────────────┘
+	│  Type=KDeleteFile  │          Level           │      File Num      │
+	│     (Varint32)     │        (Varint32)        │      (String)      │
+	├────────────────────┴──────────────────────────┴────────────────────┤
+	│                                ...                                 │
+	│                                                                    │
+	├────────────────────┬──────────────────────────┬────────────────────┤
+	│  Type=KDeleteFile  │          Level           │      File Num      │
+	│     (Varint32)     │        (Varint32)        │      (String)      │
+	├────────────────────┼──────────────────────────┼────────────────────┼──────────────────────────┐
+	│   Type=KNewFile    │          Level           │      File Num      │        File Size         │
+	│     (Varint32)     │        (Varint32)        │     (Varint64)     │        (Varint64)        │
+	├────────────────────┼──────────────────────────┼────────────────────┼──────────────────────────┤
+	│Smallest Key Length │       Smallest Key       │ Largest Key Length │       Largest Key        │
+	│     (Varint32)     │         (String)         │     (Varint32)     │         (String)         │
+	└────────────────────┴──────────────────────────┴────────────────────┴──────────────────────────┘
+*/
 func (p *sessionRecord) decode(r io.Reader) error {
 	br, ok := r.(byteReader)
 	if !ok {
@@ -273,11 +352,13 @@ func (p *sessionRecord) decode(r io.Reader) error {
 		case recComparer:
 			x := p.readBytes("comparer", br)
 			if p.err == nil {
+				// 设置Comparer名字
 				p.setComparer(string(x))
 			}
 		case recJournalNum:
 			x := p.readVarint("journal-num", br)
 			if p.err == nil {
+				// 设置JournalNum
 				p.setJournalNum(x)
 			}
 		case recPrevJournalNum:

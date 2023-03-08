@@ -408,25 +408,32 @@ func (v *version) needCompaction() bool {
 	return v.cScore >= 1 || atomic.LoadPointer(&v.cSeek) != nil
 }
 
+// 对应Manifest session record
 type tablesScratch struct {
-	added   map[int64]atRecord
-	deleted map[int64]struct{}
+	added   map[int64]atRecord // 添加的sstable 文件
+	deleted map[int64]struct{} // 删除的sstable文件, 可以理解 deleted 就是 set类型，(000012,000021,000022), 表示删除的sstable 文件序号
 }
 
+// Leveldb每次新生成sstable文件，或者删除sstable文件，都会从一个版本升级成另外一个版本 , 对应Manifest session record
+// 管理这当前版本新增的哪些sstable文件和删除了哪些sstable文件
 type versionStaging struct {
-	base   *version
-	levels []tablesScratch
+	base   *version        // leveldb 当前的版本
+	levels []tablesScratch // 管理哪一层新增了哪些sstable文件；删除了哪些sstable文件
 }
 
+// cache 的逻辑 不在则添加，存在直接返回
 func (p *versionStaging) getScratch(level int) *tablesScratch {
+	// 判断这个level 是否在session tag 管理的level列表中，不在添加进去
 	if level >= len(p.levels) {
 		newLevels := make([]tablesScratch, level+1)
 		copy(newLevels, p.levels)
 		p.levels = newLevels
 	}
+	// 在的话直接返回
 	return &(p.levels[level])
 }
 
+// 对应Manifest session record, 从record 补充当前的version tag
 func (p *versionStaging) commit(r *sessionRecord) {
 	// Deleted tables.
 	for _, r := range r.deletedTables {
@@ -437,6 +444,7 @@ func (p *versionStaging) commit(r *sessionRecord) {
 			}
 			scratch.deleted[r.num] = struct{}{}
 		}
+		// add管理的新增文件如果存在ssatble 序号， 则清除
 		if scratch.added != nil {
 			delete(scratch.added, r.num)
 		}
@@ -448,6 +456,16 @@ func (p *versionStaging) commit(r *sessionRecord) {
 		if scratch.added == nil {
 			scratch.added = make(map[int64]atRecord)
 		}
+		/*
+			r record内容：
+				├────────────────────┼──────────────────────────┼────────────────────┼──────────────────────────┐
+				│   Type=KNewFile    │          Level           │      File Num      │        File Size         │
+				│     (Varint32)     │        (Varint32)        │     (Varint64)     │        (Varint64)        │
+				├────────────────────┼──────────────────────────┼────────────────────┼──────────────────────────┤
+				│Smallest Key Length │       Smallest Key       │ Largest Key Length │       Largest Key        │
+				│     (Varint32)     │         (String)         │     (Varint32)     │         (String)         │
+				└────────────────────┴──────────────────────────┴────────────────────┴──────────────────────────┘
+		*/
 		scratch.added[r.num] = r
 		if scratch.deleted != nil {
 			delete(scratch.deleted, r.num)
@@ -459,9 +477,11 @@ func (p *versionStaging) finish(trivial bool) *version {
 	// Build new version.
 	nv := newVersion(p.base.s)
 	numLevel := len(p.levels)
+	// numLevel = max(p.base.levels, len(p.levels))
 	if len(p.base.levels) > numLevel {
 		numLevel = len(p.base.levels)
 	}
+	//设置新版本的levels
 	nv.levels = make([]tFiles, numLevel)
 	for level := 0; level < numLevel; level++ {
 		var baseTabels tFiles
