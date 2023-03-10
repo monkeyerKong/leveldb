@@ -95,7 +95,7 @@ func newSession(stor storage.Storage, o *opt.Options) (s *session, err error) {
 	// 启动session loop 循环
 	go s.refLoop()
 
-	// 为session新建version版本，没有session record, version 仅包含session 句柄，id, nid
+	// 为session新建version版本，没有session record, version 仅包含session 句柄，id
 	s.setVersion(nil, newVersion(s))
 	s.log("log@legend F·NumFile S·FileSize N·Entry C·BadEntry B·BadBlock Ke·KeyError D·DroppedEntry L·Level Q·SeqNum T·TimeElapsed")
 	return
@@ -144,7 +144,7 @@ func (s *session) recover() (err error) {
 		}
 	}()
 
-	//fd 是最新的Manifest文件, 即元数据文件
+	//fd 是从CURRENT文件查找到最新的Manifest文件, 即元数据文件, 并返回MAINFEST句柄Fd
 	fd, err := s.stor.GetMeta()
 	if err != nil {
 		return

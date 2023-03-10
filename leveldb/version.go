@@ -23,10 +23,10 @@ type tSet struct {
 }
 
 type version struct {
-	id int64 // unique monotonous increasing version id
-	s  *session
+	id int64    // unique monotonous increasing version id
+	s  *session // 对应的session
 
-	levels []tFiles
+	levels []tFiles //
 
 	// Level that should be compacted next and its compaction score.
 	// Score < 1 means compaction is not strictly needed. These fields
@@ -42,20 +42,24 @@ type version struct {
 }
 
 // newVersion creates a new version with an unique monotonous increasing id.
+// 仅初始化version的session 和 version id, session的 next versionID +1 和 version +1
 func newVersion(s *session) *version {
 	id := atomic.AddInt64(&s.ntVersionID, 1)
 	nv := &version{s: s, id: id - 1}
 	return nv
 }
 
+// 增加版本的引用计数, 在ref = 1 时，发送vtask 给 refloop-> refCh 处理版本信息
 func (v *version) incref() {
 	if v.released {
 		panic("already released")
 	}
 
 	v.ref++
+	// 版本更新的时候(或者说新生成一个版本)
 	if v.ref == 1 {
 		select {
+		// refloop() 监听refCh，收这个消息, 初始化时： id = 0, levels = nil
 		case v.s.refCh <- &vTask{vid: v.id, files: v.levels, created: time.Now()}:
 			// We can use v.levels directly here since it is immutable.
 		case <-v.s.closeC:
@@ -272,6 +276,7 @@ func (v *version) getIterators(slice *util.Range, ro *opt.ReadOptions) (its []it
 	return
 }
 
+// 新建一个version tag, 仅初始化了base, 即当前的version
 func (v *version) newStaging() *versionStaging {
 	return &versionStaging{base: v}
 }
@@ -418,7 +423,7 @@ type tablesScratch struct {
 	deleted map[int64]struct{} // 删除的sstable文件, 可以理解 deleted 就是 set类型，(000012,000021,000022), 表示删除的sstable 文件序号
 }
 
-// Leveldb每次新生成sstable文件，或者删除sstable文件，都会从一个版本升级成另外一个版本 , 对应Manifest session record
+// Leveldb每次新生成sstable文件，或者删除sstable文件，都会从一个版本升级成另外一个版本 由version tag对象管理, 对应到Manifest session record
 // 管理这当前版本新增的哪些sstable文件和删除了哪些sstable文件
 type versionStaging struct {
 	base   *version        // leveldb 当前的版本
@@ -437,7 +442,7 @@ func (p *versionStaging) getScratch(level int) *tablesScratch {
 	return &(p.levels[level])
 }
 
-// 对应Manifest session record, 从record 补充当前的version tag
+// 对应Manifest session record, 从文件中record 补充当前的version tag 的 levels
 func (p *versionStaging) commit(r *sessionRecord) {
 	// Deleted tables.
 	for _, r := range r.deletedTables {
@@ -478,6 +483,7 @@ func (p *versionStaging) commit(r *sessionRecord) {
 }
 
 // 对base.levels 保存的sstable文件和record 中每层level的变化的sstable(就是 add 和delete)做并集 ,保存在新版本的base.levels 中, 并计算level的stat，设置compaction的标志
+// version tag finish 把version tag 记录的变化sstable 和 上一个version 记录的sstable做并集 重新生成一个新的version
 func (p *versionStaging) finish(trivial bool) *version {
 	// Build new version.
 	nv := newVersion(p.base.s)
@@ -508,13 +514,15 @@ func (p *versionStaging) finish(trivial bool) *version {
 			}
 
 			var nt tFiles
-			// Prealloc list if possible. 新增的tables 总数 大于 deleted tables总数
+			// Prealloc list if possible. 存量+新增的tables 总数 大于 deleted tables总数
 			if n := len(baseTabels) + len(scratch.added) - len(scratch.deleted); n > 0 {
 				// new 一个buffer，容量等于差值
 				nt = make(tFiles, 0, n)
 			}
 
-			// 遍历Base tables. 保留delete table 不存在的，且 add包存在的
+			// 遍历当前version存量的 tables. 过滤掉version tag 中新增add 和 deleted 的sstable 文件,
+			// (version levels  和 version tag 的add集合和delete集合做 差集)
+			// TODO: 这块代码修改成和 delete的集合 做差集，和 added集合做并集, 下面的判断 added 等于0 和 遍历 added 填充nt的逻辑可以去掉了, ^^, 这块想错了，在启动 session ，做recover的时候， baseTabels是空
 			for _, t := range baseTabels {
 				if _, ok := scratch.deleted[t.fd.Num]; ok {
 					continue
@@ -582,6 +590,7 @@ func (p *versionStaging) finish(trivial bool) *version {
 				nv.levels[level] = nt
 			}
 		} else {
+			// 当前version 比 version tag的记录要新
 			nv.levels[level] = baseTabels
 		}
 	}

@@ -188,10 +188,12 @@ func (s *session) refLoop() {
 		processTasks()
 
 		select {
+		// version.inref() 在ref ==1 时发送消息: vTask{vid: v.id, files: v.levels, created: time.Now()}
 		case t := <-s.refCh:
 			if _, exist := ref[t.vid]; exist {
 				panic("duplicate reference request")
 			}
+			// 保存，如果是最新的version id, 更新
 			ref[t.vid] = t
 			if t.vid > last {
 				last = t.vid
@@ -275,7 +277,7 @@ func (s *session) setVersion(r *sessionRecord, v *version) {
 	// Hold by session. It is important to call this first before releasing
 	// current version, otherwise the still used files might get released.
 	v.incref()
-	// 已被初始化
+
 	if s.stVersion != nil {
 		// 追加session record
 		if r != nil {
@@ -296,7 +298,7 @@ func (s *session) setVersion(r *sessionRecord, v *version) {
 				s.log("reference loop already exist")
 			}
 		}
-		// Release current version.
+		// Release current version. 释放上一个版本
 		s.stVersion.releaseNB()
 	}
 	s.stVersion = v
