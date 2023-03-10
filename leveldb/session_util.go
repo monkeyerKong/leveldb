@@ -314,7 +314,7 @@ func (s *session) setNextFileNum(num int64) {
 	atomic.StoreInt64(&s.stNextFileNum, num)
 }
 
-// Mark file number as used.
+// Mark file number as used. 是一个spinlock实现, 设置nextFileNum
 func (s *session) markFileNum(num int64) {
 	nextFileNum := num + 1
 	for {

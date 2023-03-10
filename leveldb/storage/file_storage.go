@@ -483,6 +483,7 @@ func (fs *fileStorage) GetMeta() (FileDesc, error) {
 	return FileDesc{}, curErr
 }
 
+// 根据文件类型收集文件
 func (fs *fileStorage) List(ft FileType) (fds []FileDesc, err error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
@@ -685,6 +686,7 @@ func fsGenOldName(fd FileDesc) string {
 	}
 }
 
+// 根据文件名称 构建FileDesc对象
 func fsParseName(name string) (fd FileDesc, ok bool) {
 	var tail string
 	_, err := fmt.Sscanf(name, "%d.%s", &fd.Num, &tail)

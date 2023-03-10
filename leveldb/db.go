@@ -93,6 +93,8 @@ type DB struct {
 	closer io.Closer
 }
 
+// 创建DB对象，并启动4个线程, 并从journal日志中构建对象的属性
+// 4个线程包括 做minor compaction, 做major compaction, 错误处理
 func openDB(s *session) (*DB, error) {
 	s.log("db@open opening")
 	start := time.Now()
@@ -111,9 +113,9 @@ func openDB(s *session) (*DB, error) {
 		writeAckC:    make(chan error),
 
 		// Compaction
-		tcompCmdC:   make(chan cCmd), // tcompCmdC major compaction 信号, 阻塞式
+		tcompCmdC:   make(chan cCmd), // sstable文件 major compaction 信号, 阻塞式
 		tcompPauseC: make(chan chan<- struct{}),
-		mcompCmdC:   make(chan cCmd),
+		mcompCmdC:   make(chan cCmd), // 内存 minor compaction 信号
 		compErrC:    make(chan error),
 		compPerErrC: make(chan error),
 		compErrSetC: make(chan error),
@@ -499,7 +501,7 @@ func recoverTable(s *session, o *opt.Options) error {
 }
 
 func (db *DB) recoverJournal() error {
-	// Get all journals and sort it by file number.
+	// Get all journals and sort it by file number. 000098.log 这类文件
 	rawFds, err := db.s.stor.List(storage.TypeJournal)
 	if err != nil {
 		return err
@@ -508,6 +510,7 @@ func (db *DB) recoverJournal() error {
 
 	// Journals that will be recovered.
 	var fds []storage.FileDesc
+	// 过滤比当前session 记录的journal 序号大的 wal文件, 因为这部分内容才是新增的
 	for _, fd := range rawFds {
 		if fd.Num >= db.s.stJournalNum || fd.Num == db.s.stPrevJournalNum {
 			fds = append(fds, fd)
@@ -523,7 +526,7 @@ func (db *DB) recoverJournal() error {
 	if len(fds) > 0 {
 		db.logf("journal@recovery F·%d", len(fds))
 
-		// Mark file number as used.
+		// Mark file number as used. //根据journal的Num设置nextFileNum
 		db.s.markFileNum(fds[len(fds)-1].Num)
 
 		var (
@@ -533,7 +536,7 @@ func (db *DB) recoverJournal() error {
 			writeBuffer = db.s.o.GetWriteBuffer()
 
 			jr       *journal.Reader
-			mdb      = memdb.New(db.s.icmp, writeBuffer)
+			mdb      = memdb.New(db.s.icmp, writeBuffer) // new skiplist
 			buf      = &util.Buffer{}
 			batchSeq uint64
 			batchLen int
@@ -593,6 +596,7 @@ func (db *DB) recoverJournal() error {
 				}
 
 				buf.Reset()
+				// 读取journal 日志到buf
 				if _, err := buf.ReadFrom(r); err != nil {
 					if err == io.ErrUnexpectedEOF {
 						// This is error returned due to corruption, with strict == false.

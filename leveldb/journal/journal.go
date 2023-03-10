@@ -246,6 +246,23 @@ func (r *Reader) nextChunk(first bool) error {
 // more journals. The reader returned becomes stale after the next Next call,
 // and should no longer be used. If strict is false, the reader will returns
 // io.ErrUnexpectedEOF error when found corrupted journal.
+/*
+	Journal 文件格式:
+												Full
+											First  ╱
+											╱Middle─╱
+											╱  Last
+										╱
+		┌────────────┬────────────┬────────────┬────────────┬────────────┬────────────┬────────────┬────────────┬────────────┬────────────┐
+		│  checkSum  │Data Length │    Type    │ Batch Seq  │ Batch Size │  Key Type  │ Key Length │    Key     │Value Length│   Value    │
+		│            │            │            │            │            │            │            │            │            │            │
+		└────────────┴────────────┴────────────┴────────────┴────────────┴────────────┴────────────┴────────────┴────────────┴────────────┘
+			│                         │            │                                                                             │
+			│           Block         │            │                                                                             │
+			└───────────Header────────┘            └────────────────────────────────────Data─────────────────────────────────────┘
+
+
+*/
 func (r *Reader) Next() (io.Reader, error) {
 	r.seq++
 	if r.err != nil {
