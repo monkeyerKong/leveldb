@@ -22,10 +22,10 @@ import (
 
 // tFile holds basic information about a table.
 type tFile struct {
-	fd         storage.FileDesc
-	seekLeft   int32
-	size       int64
-	imin, imax internalKey
+	fd         storage.FileDesc // 文件描述符对象, 包含文件类型，及文件序号
+	seekLeft   int32            //
+	size       int64            // 文件大小
+	imin, imax internalKey      // 文件最小key 和最大key
 }
 
 // Returns true if given key is after largest key of this table.

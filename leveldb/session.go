@@ -36,11 +36,11 @@ func newErrManifestCorrupted(fd storage.FileDesc, field, reason string) error {
 // session represent a persistent database session.
 type session struct {
 	// Need 64-bit alignment.
-	stNextFileNum    int64 // current unused file number, 指的sstable 的文件号
-	stJournalNum     int64 // current journal file number; need external synchronization
-	stPrevJournalNum int64 // prev journal file number; no longer used; for compatibility with older version of leveldb
+	stNextFileNum    int64 // current unused file number, 指的sstable 的文件序号
+	stJournalNum     int64 // current journal file number; need external synchronization 当前wal 的序号
+	stPrevJournalNum int64 // prev journal file number; no longer used; for compatibility with older version of leveldb 上一个wal的序号
 	stTempFileNum    int64
-	stSeqNum         uint64 // last mem compacted seq; need external synchronization
+	stSeqNum         uint64 // last mem compacted seq; need external synchronization 数据库已经持久化数据项中最大的sequence number
 
 	stor     *iStorage
 	storLock storage.Locker
@@ -57,7 +57,7 @@ type session struct {
 	ntVersionID int64         // next version id to assign
 	refCh       chan *vTask
 	relCh       chan *vTask
-	deltaCh     chan *vDelta
+	deltaCh     chan *vDelta // 版本变化新增和删除的文件 通信channel
 	abandon     chan int64
 	closeC      chan struct{}
 	closeW      sync.WaitGroup
@@ -72,6 +72,7 @@ func newSession(stor storage.Storage, o *opt.Options) (s *session, err error) {
 	if stor == nil {
 		return nil, os.ErrInvalid
 	}
+	// 初始化session storLock, 该锁中记录了filestorage对象
 	storLock, err := stor.Lock()
 	if err != nil {
 		return
@@ -90,14 +91,18 @@ func newSession(stor storage.Storage, o *opt.Options) (s *session, err error) {
 	s.tops = newTableOps(s)
 
 	s.closeW.Add(1)
+
+	// 启动session loop 循环
 	go s.refLoop()
-	// 新建version，没有session record, version 仅包含session 句柄，id, nid
+
+	// 为session新建version版本，没有session record, version 仅包含session 句柄，id, nid
 	s.setVersion(nil, newVersion(s))
 	s.log("log@legend F·NumFile S·FileSize N·Entry C·BadEntry B·BadBlock Ke·KeyError D·DroppedEntry L·Level Q·SeqNum T·TimeElapsed")
 	return
 }
 
 // Close session.
+// 阻塞，直到对应到 refloop() 事件循环收到退出事件
 func (s *session) close() {
 	s.tops.close()
 	if s.manifest != nil {
@@ -112,7 +117,7 @@ func (s *session) close() {
 
 	// Close all background goroutines
 	close(s.closeC)
-	//对应到 refloop() 事件循环
+
 	s.closeW.Wait()
 }
 

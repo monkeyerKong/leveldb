@@ -185,7 +185,7 @@ func openDB(s *session) (*DB, error) {
 // The returned DB instance is safe for concurrent use.
 // The DB must be closed after use, by calling Close method.
 func Open(stor storage.Storage, o *opt.Options) (db *DB, err error) {
-	// 新建session
+	// 新建session, 并设置stor.slock
 	s, err := newSession(stor, o)
 	if err != nil {
 		return
@@ -230,7 +230,7 @@ func Open(stor storage.Storage, o *opt.Options) (db *DB, err error) {
 // The returned DB instance is safe for concurrent use.
 // The DB must be closed after use, by calling Close method.
 func OpenFile(path string, o *opt.Options) (db *DB, err error) {
-	// 打开文件，返回fileStroge句柄
+	// 打开文件，返回fileStroge句柄,此时 stor.slock 未设置
 	stor, err := storage.OpenFile(path, o.GetReadOnly())
 	if err != nil {
 		return

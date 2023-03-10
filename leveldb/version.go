@@ -358,9 +358,12 @@ func (v *version) computeCompaction() {
 	bestLevel := int(-1)
 	bestScore := float64(-1)
 
+	//版本的stat信息
 	statFiles := make([]int, len(v.levels))
 	statSizes := make([]string, len(v.levels))
+	// 记录每层的分数
 	statScore := make([]string, len(v.levels))
+	// 总容量大小
 	statTotSize := int64(0)
 
 	// 如果level0 和 非level 0 同时达到了需要做major compaction, 需要先做高level 的 major的 compaction
@@ -379,7 +382,7 @@ func (v *version) computeCompaction() {
 			// file size is small (perhaps because of a small write-buffer
 			// setting, or very high compression ratios, or lots of
 			// overwrites/deletions).
-			// level 0层文件数超过预定的上限
+			// level 0层文件数超过预定的上限, 需要做major compaction
 			score = float64(len(tables)) / float64(v.s.o.GetCompactionL0Trigger())
 		} else {
 			// 非 level 0 文件的总大小超过(10 * 10 ^ i) MB
@@ -397,8 +400,9 @@ func (v *version) computeCompaction() {
 		statTotSize += size
 	}
 
+	// 设置major compaction的标志位
 	v.cLevel = bestLevel
-	v.cScore = bestScore
+	v.cScore = bestScore // 大于1 执行 major compation
 
 	v.s.logf("version@stat F·%v S·%s%v Sc·%v", statFiles, shortenb(statTotSize), statSizes, statScore)
 }
@@ -473,6 +477,7 @@ func (p *versionStaging) commit(r *sessionRecord) {
 	}
 }
 
+// 对base.levels 保存的sstable文件和record 中每层level的变化的sstable(就是 add 和delete)做并集 ,保存在新版本的base.levels 中, 并计算level的stat，设置compaction的标志
 func (p *versionStaging) finish(trivial bool) *version {
 	// Build new version.
 	nv := newVersion(p.base.s)
@@ -485,26 +490,31 @@ func (p *versionStaging) finish(trivial bool) *version {
 	nv.levels = make([]tFiles, numLevel)
 	for level := 0; level < numLevel; level++ {
 		var baseTabels tFiles
+		// 从base.levels中取出 level 对应的tFiles
 		if level < len(p.base.levels) {
 			baseTabels = p.base.levels[level]
 		}
 
+		// base 和 versions tage的level(其实是session record增减table记录集和), 做并集
 		if level < len(p.levels) {
 			scratch := p.levels[level]
 
 			// Short circuit if there is no change at all.
+			// p.levels 对应的level add tables和 delete tables 都是空
 			if len(scratch.added) == 0 && len(scratch.deleted) == 0 {
+				// 新版本对象直接使用base 中的 tabels
 				nv.levels[level] = baseTabels
 				continue
 			}
 
 			var nt tFiles
-			// Prealloc list if possible.
+			// Prealloc list if possible. 新增的tables 总数 大于 deleted tables总数
 			if n := len(baseTabels) + len(scratch.added) - len(scratch.deleted); n > 0 {
+				// new 一个buffer，容量等于差值
 				nt = make(tFiles, 0, n)
 			}
 
-			// Base tables.
+			// 遍历Base tables. 保留delete table 不存在的，且 add包存在的
 			for _, t := range baseTabels {
 				if _, ok := scratch.deleted[t.fd.Num]; ok {
 					continue
@@ -516,6 +526,7 @@ func (p *versionStaging) finish(trivial bool) *version {
 			}
 
 			// Avoid resort if only files in this level are deleted
+			// 此时已经遍历完了 base ，快速判断，如果add 没有sstable， 直接使用base的结果
 			if len(scratch.added) == 0 {
 				nv.levels[level] = nt
 				continue
@@ -531,6 +542,7 @@ func (p *versionStaging) finish(trivial bool) *version {
 			// already ordered arrays. Therefore, for the normal table compaction, we use
 			// binary search here to find the insert index to insert a batch of new added
 			// files directly instead of using qsort.
+			// recove() 方法不执行下面逻辑
 			if trivial && len(scratch.added) > 0 {
 				added := make(tFiles, 0, len(scratch.added))
 				for _, r := range scratch.added {
@@ -550,16 +562,20 @@ func (p *versionStaging) finish(trivial bool) *version {
 				continue
 			}
 
+			// add 中存在 sstable, 把这部分也追加到新的nt中
 			// New tables.
 			for _, r := range scratch.added {
 				nt = append(nt, tableFileFromRecord(r))
 			}
 
+			// TODO: len(nt) 应该大于0，不存在小于0, 应该不需要做这部分判断
 			if len(nt) != 0 {
 				// Sort tables.
 				if level == 0 {
+					// level 0 层 sstalbe 号大在最前面
 					nt.sortByNum()
 				} else {
+					// 不是level 0 层，按照key排序, key大的sstable 在前面
 					nt.sortByKey(p.base.s.icmp)
 				}
 
@@ -570,7 +586,8 @@ func (p *versionStaging) finish(trivial bool) *version {
 		}
 	}
 
-	// Trim levels.
+	// Trim levels. 仅保留到有值的level
+	// [1,2,3,4,nil,nil,nil], 仅保留到4
 	n := len(nv.levels)
 	for ; n > 0 && nv.levels[n-1] == nil; n-- {
 	}

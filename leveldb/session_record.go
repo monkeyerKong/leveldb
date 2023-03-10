@@ -54,6 +54,50 @@ type dtRecord struct {
 	num   int64 //sstable 文件号
 }
 
+/*
+Manifest session record文件格式:
+
+	┌────────────────────┬──────────────────────────┬────────────────────┐
+	│   Type=KComparer   │  kComparer Name Length   │   KComparer Name   │
+	│     (Varint32)     │        (Varint32)        │      (String)      │
+	├────────────────────┼──────────────────────────┼────────────────────┘
+	│  Type=KLogNumber   │        Log Number        │
+	│     (Varint32)     │        (Varint64)        │
+	├────────────────────┼──────────────────────────┤
+	│Type=KPrevLogNumber │     Prev Log Number      │
+	│     (Varint32)     │        (Varint64)        │
+	├────────────────────┼──────────────────────────┤
+	│Type=KNextFileNumber│     Next File Number     │
+	│     (Varint32)     │        (Varint64)        │
+	├────────────────────┼──────────────────────────┤
+	│ Type=KLastSequence │   Last Sequence Number   │
+	│     (Varint32)     │        (Varint64)        │
+	├────────────────────┼──────────────────────────┼────────────────────┬──────────────────────────┐
+	│Type=KComparerPointe│          Level           │Internal Key Length │       Internal Key       │
+	│         r          │        (Varint32)        │     (Varint64)     │         (String)         │
+	├────────────────────┴──────────────────────────┴────────────────────┴──────────────────────────┤
+	│                                              ...                                              │
+	│                                                                                               │
+	├────────────────────┬──────────────────────────┬────────────────────┬──────────────────────────┤
+	│Type=KComparerPointe│          Level           │Internal Key Length │       Internal Key       │
+	│         r          │        (Varint32)        │     (Varint64)     │         (String)         │
+	├────────────────────┼──────────────────────────┼────────────────────┼──────────────────────────┘
+	│  Type=KDeleteFile  │          Level           │      File Num      │
+	│     (Varint32)     │        (Varint32)        │      (String)      │
+	├────────────────────┴──────────────────────────┴────────────────────┤
+	│                                ...                                 │
+	│                                                                    │
+	├────────────────────┬──────────────────────────┬────────────────────┤
+	│  Type=KDeleteFile  │          Level           │      File Num      │
+	│     (Varint32)     │        (Varint32)        │      (String)      │
+	├────────────────────┼──────────────────────────┼────────────────────┼──────────────────────────┐
+	│   Type=KNewFile    │          Level           │      File Num      │        File Size         │
+	│     (Varint32)     │        (Varint32)        │     (Varint64)     │        (Varint64)        │
+	├────────────────────┼──────────────────────────┼────────────────────┼──────────────────────────┤
+	│Smallest Key Length │       Smallest Key       │ Largest Key Length │       Largest Key        │
+	│     (Varint32)     │         (String)         │     (Varint32)     │         (String)         │
+	└────────────────────┴──────────────────────────┴────────────────────┴──────────────────────────┘
+*/
 type sessionRecord struct {
 	/*
 		hasRec掩码标志位：

@@ -34,6 +34,7 @@ type fileStorageLock struct {
 	fs *fileStorage
 }
 
+// 就是把fileStorageLock.slock标志设置为nil
 func (lock *fileStorageLock) Unlock() {
 	if lock.fs != nil {
 		lock.fs.mu.Lock()
@@ -72,17 +73,17 @@ const logSizeThreshold = 1024 * 1024 // 1 MiB
 
 // fileStorage is a file-system backed storage.
 type fileStorage struct {
-	path     string
+	path     string // 打开db的目录. 比如 /path/to/db
 	readOnly bool
 
 	mu      sync.Mutex
-	flock   fileLock
+	flock   fileLock //目录下锁文件，即/path/to/db/LOCK
 	slock   *fileStorageLock
-	logw    *os.File
-	logSize int64
+	logw    *os.File //目录下的日志文件句柄， 给人看的，不是wal 日志, 如:/path/to/db/LOG
+	logSize int64    // 目录下的日志文件大小，同上
 	buf     []byte
 	// Opened file counter; if open < 0 means closed.
-	open int
+	open int // /path/to/db 目录下打开文件的数量
 	day  int
 }
 
@@ -139,10 +140,11 @@ func OpenFile(path string, readOnly bool) (Storage, error) {
 		}
 	}
 
+	// 打开文件的时候未初始化slock锁
 	fs := &fileStorage{
 		path:     path,
 		readOnly: readOnly,
-		flock:    flock,
+		flock:    flock, // 目录下的文件锁
 		logw:     logw,
 		logSize:  logSize,
 	}
@@ -150,6 +152,7 @@ func OpenFile(path string, readOnly bool) (Storage, error) {
 	return fs, nil
 }
 
+// 返回 fileStorageLock对象, 即初始化fs.slock
 func (fs *fileStorage) Lock() (Locker, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()

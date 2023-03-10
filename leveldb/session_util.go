@@ -55,9 +55,9 @@ const (
 // vDelta indicates the change information between the next version
 // and the currently specified version
 type vDelta struct {
-	vid     int64
-	added   []int64
-	deleted []int64
+	vid     int64   // 版本号
+	added   []int64 // 新增文件号前缀, 000008.ldb 记录的是 000008
+	deleted []int64 // 删除的文件号前缀
 }
 
 // vTask defines a version task for either reference or release.
@@ -69,7 +69,7 @@ type vTask struct {
 
 func (s *session) refLoop() {
 	var (
-		fileRef    = make(map[int64]int)    // Table file reference counter
+		fileRef    = make(map[int64]int)    // Table file reference counter 所有sstable文件的引进计数 例如：[000008]=2 其中000008 文件前缀，2是引用计数
 		ref        = make(map[int64]*vTask) // Current referencing version store
 		deltas     = make(map[int64]*vDelta)
 		referenced = make(map[int64]struct{})
@@ -101,6 +101,7 @@ func (s *session) refLoop() {
 	// applyDelta applies version change to current file reference.
 	applyDelta := func(d *vDelta) {
 		for _, t := range d.added {
+			// 操作文件的引用计数
 			addFileRef(t, 1)
 		}
 		for _, t := range d.deleted {
@@ -196,6 +197,9 @@ func (s *session) refLoop() {
 				last = t.vid
 			}
 
+			// 每次version版本号变化且有新的record，会发送deltaCh信号, 信号内容Delta{vid: s.stVersion.id, added: added, deleted: deleted}
+			// vid: 版本ID, added: 新增的sstable文件，deleted 删除sstable文件
+			//setVersion()方法触发
 		case d := <-s.deltaCh:
 			if _, exist := ref[d.vid]; !exist {
 				if _, exist2 := referenced[d.vid]; !exist2 {
@@ -241,8 +245,8 @@ func (s *session) refLoop() {
 			}
 			r <- ref
 
+		// session 关闭事件
 		case <-s.closeC:
-			// 关闭session waitGroup
 			s.closeW.Done()
 			return
 		}
@@ -286,6 +290,7 @@ func (s *session) setVersion(r *sessionRecord, v *version) {
 				deleted = append(deleted, t.num)
 			}
 			select {
+			// 在refloop()线程中监听deltaCh信号
 			case s.deltaCh <- &vDelta{vid: s.stVersion.id, added: added, deleted: deleted}:
 			case <-v.s.closeC:
 				s.log("reference loop already exist")
@@ -346,6 +351,7 @@ func (s *session) setCompPtr(level int, ik internalKey) {
 		copy(newCompPtrs, s.stCompPtrs)
 		s.stCompPtrs = newCompPtrs
 	}
+	// 记录level 对应的ikey
 	s.stCompPtrs[level] = append(internalKey{}, ik...)
 }
 
@@ -385,6 +391,7 @@ func (s *session) fillRecord(r *sessionRecord, snapshot bool) {
 
 // Mark if record has been committed, this will update session state;
 // need external synchronization.
+// 设置session 标志位 根据record记录
 func (s *session) recordCommited(rec *sessionRecord) {
 	if rec.has(recJournalNum) {
 		s.stJournalNum = rec.journalNum
