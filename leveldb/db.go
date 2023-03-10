@@ -585,7 +585,7 @@ func (db *DB) recoverJournal() error {
 			// Replay journal to memdb.
 			mdb.Reset()
 			for {
-				r, err := jr.Next()
+				r, err := jr.Next() // 设置r.buf 左右偏移量，即数据部分
 				if err != nil {
 					if err == io.EOF {
 						break
@@ -726,6 +726,7 @@ func (db *DB) recoverJournalRO() error {
 
 			// Replay journal to memdb.
 			for {
+
 				r, err := jr.Next()
 				if err != nil {
 					if err == io.EOF {

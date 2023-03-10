@@ -131,10 +131,10 @@ type Reader struct {
 	strict bool
 	// checksum flag.
 	checksum bool
-	// seq is the sequence number of the current journal.
+	// seq is the sequence number of the current journal. 一块数据(block)的计数
 	seq int
 	// buf[i:j] is the unread portion of the current chunk's payload.
-	// The low bound, i, excludes the chunk header.
+	// The low bound, i, excludes the chunk header., 可以理解为滑动窗口
 	i, j int
 	// n is the number of bytes of buf that are valid. Once reading has started,
 	// only the final block can have n < blockSize.
@@ -174,45 +174,56 @@ func (r *Reader) corrupt(n int, reason string, skip bool) error {
 }
 
 // nextChunk sets r.buf[r.i:r.j] to hold the next chunk's payload, reading the
-// next block into the buffer if necessary.
+// next block into the buffer if necessary. 设置 r.buf 数据块的 左右偏移量
 func (r *Reader) nextChunk(first bool) error {
 	for {
+		// 一个block 仅有一个 header
 		if r.j+headerSize <= r.n {
-			checksum := binary.LittleEndian.Uint32(r.buf[r.j+0 : r.j+4])
-			length := binary.LittleEndian.Uint16(r.buf[r.j+4 : r.j+6])
-			chunkType := r.buf[r.j+6]
-			unprocBlock := r.n - r.j
+			checksum := binary.LittleEndian.Uint32(r.buf[r.j+0 : r.j+4]) // 4字节 checksum
+			length := binary.LittleEndian.Uint16(r.buf[r.j+4 : r.j+6])   // 2字节 data length
+			chunkType := r.buf[r.j+6]                                    // 1字节 type
+			unprocBlock := r.n - r.j                                     // 未拆包的block offset
+
+			// 异常block，没有header信息
 			if checksum == 0 && length == 0 && chunkType == 0 {
 				// Drop entire block.
 				r.i = r.n
 				r.j = r.n
 				return r.corrupt(unprocBlock, "zero header", false)
 			}
+
+			// 异常block， 不存在该类型
 			if chunkType < fullChunkType || chunkType > lastChunkType {
 				// Drop entire block.
 				r.i = r.n
 				r.j = r.n
 				return r.corrupt(unprocBlock, fmt.Sprintf("invalid chunk type %#x", chunkType), false)
 			}
-			r.i = r.j + headerSize
-			r.j = r.j + headerSize + int(length)
+
+			r.i = r.j + headerSize               // 移动左沿，移动到数据头部分
+			r.j = r.j + headerSize + int(length) // 移动右沿，移动到数据尾部
+
+			// 右沿超过 block的总长额度，异常
 			if r.j > r.n {
 				// Drop entire block.
 				r.i = r.n
 				r.j = r.n
 				return r.corrupt(unprocBlock, "chunk length overflows block", false)
+				// checksum 不合法, 异常
 			} else if r.checksum && checksum != util.NewCRC(r.buf[r.i-1:r.j]).Value() {
 				// Drop entire block.
 				r.i = r.n
 				r.j = r.n
 				return r.corrupt(unprocBlock, "checksum mismatch", false)
 			}
+			// 读chunk类型为 first ，但是检测到的类型first 或者full ，block 不合法
 			if first && chunkType != fullChunkType && chunkType != firstChunkType {
 				chunkLength := (r.j - r.i) + headerSize
 				r.i = r.j
 				// Report the error, but skip it.
 				return r.corrupt(chunkLength, "orphan chunk", true)
 			}
+			// 合法, 标记last 为 true( 类型为 full 或者 last) 或者 false (类型为 first 或者 middle)，
 			r.last = chunkType == fullChunkType || chunkType == lastChunkType
 			return nil
 		}
@@ -226,7 +237,7 @@ func (r *Reader) nextChunk(first bool) error {
 			return r.err
 		}
 
-		// Read block.
+		// Read block. (进入该函数，应直接调到这里，对block 总字节数，并把block 内容写入到r.buf中)
 		n, err := io.ReadFull(r.r, r.buf[:])
 		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
 			return err
@@ -238,6 +249,7 @@ func (r *Reader) nextChunk(first bool) error {
 			r.err = io.EOF
 			return r.err
 		}
+		// 初始化 i, j, n
 		r.i, r.j, r.n = 0, 0, n
 	}
 }
@@ -262,6 +274,7 @@ func (r *Reader) nextChunk(first bool) error {
 			└───────────Header────────┘            └────────────────────────────────────Data─────────────────────────────────────┘
 
 
+			读取 r.buf[i:j] 数据部分 , 并返回singleReader对象 singleReader{r, r.seq, nil}
 */
 func (r *Reader) Next() (io.Reader, error) {
 	r.seq++
@@ -296,14 +309,17 @@ func (r *Reader) Reset(reader io.Reader, dropper Dropper, strict, checksum bool)
 	return err
 }
 
+// block reader
 type singleReader struct {
-	r   *Reader
-	seq int
+	r   *Reader // reader 句柄，
+	seq int     // journal block 的计数
 	err error
 }
 
+// 复制r.buf数据部分到 p中， 返回复制的字节数
 func (x *singleReader) Read(p []byte) (int, error) {
 	r := x.r
+	// 判断seq 合法性
 	if r.seq != x.seq {
 		return 0, errors.New("leveldb/journal: stale reader")
 	}
@@ -313,6 +329,7 @@ func (x *singleReader) Read(p []byte) (int, error) {
 	if r.err != nil {
 		return 0, r.err
 	}
+	// 读到尾部或者 读 下一个chuck
 	for r.i == r.j {
 		if r.last {
 			return 0, io.EOF
@@ -326,10 +343,12 @@ func (x *singleReader) Read(p []byte) (int, error) {
 		}
 	}
 	n := copy(p, r.buf[r.i:r.j])
+	// 移动右沿到buf 尾部
 	r.i += n
 	return n, nil
 }
 
+// 读取r.buf数据的单个字节, 返回 字节
 func (x *singleReader) ReadByte() (byte, error) {
 	r := x.r
 	if r.seq != x.seq {
