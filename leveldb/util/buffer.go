@@ -89,7 +89,7 @@ func (b *Buffer) grow(n int) int {
 		b.Reset()
 	}
 	// Try to grow by means of a reslice.
-	// 重置后再次判断是否需要扩容，不需要则直接返回. buffer当前的offset
+	// 再次判断是否需要扩容，不需要则直接返回.
 	if i, ok := b.tryGrowByReslice(n); ok {
 		return i
 	}
@@ -99,17 +99,19 @@ func (b *Buffer) grow(n int) int {
 		return 0
 	}
 	c := cap(b.buf)
+	//TODO: 下面这个逻辑应该不存在，因为b.tryGrowByReslice 就已经执行了
 	if n <= c/2-m {
 		// We can slide things down instead of allocating a new
 		// slice. We only need m+n <= c to slide, but
 		// we instead let capacity get twice as large so we
 		// don't spend all our time copying.
 		copy(b.buf, b.buf[b.off:])
+		// 扩容的容量不合法，超过系统最大范围
 	} else if c > maxInt-c-n {
 		panic(bytes.ErrTooLarge)
 	} else {
 		// 扩容
-		// Not enough space anywhere, we need to allocate.
+		// Not enough space anywhere, we need to allocate. 容量的2倍，在加上n
 		buf := makeSlice(2*c + n)
 		copy(buf, b.buf[b.off:])
 		b.buf = buf
@@ -173,12 +175,15 @@ func (b *Buffer) ReadFrom(r io.Reader) (n int64, err error) {
 		// 以最小快512 字节 扩容
 		i := b.grow(MinRead)
 		b.buf = b.buf[:i]
+		// 把r.buf内容复制到buf中, m 写入的字节数
 		m, e := r.Read(b.buf[i:cap(b.buf)])
 		if m < 0 {
 			panic("leveldb/util.Buffer.ReadFrom: reader returned negative count from Read")
 		}
 
+		// 取实际数据部分，i 是头，m是数据尾
 		b.buf = b.buf[:i+m]
+		// 计算写入到 buf中的字节数
 		n += int64(m)
 		if e == io.EOF {
 			return n, nil // e is EOF, so return nil explicitly

@@ -391,37 +391,65 @@ func MakeBatchWithConfig(config *BatchConfig) *Batch {
 	return batch
 }
 
+// 从batch data中解析k和v
 func decodeBatch(data []byte, fn func(i int, index batchIndex) error) error {
+	/*
+		格式：
+			┌─────────────┬─────────────┬─────────────┬─────────────┬─────────────┐
+			│key type     │key length   │     key     │value length │    value    │
+			│             │             │             │             │             │
+			└─────────────┴─────────────┴─────────────┴─────────────┴─────────────┘
+	*/
 	var index batchIndex
+	// i：表示 第几个batch 或者 batch 的个数
+	// o: 表示 在block内的偏移量用于计算key type, keylength等
 	for i, o := 0, 0; o < len(data); i++ {
-		// Key type.
+		// Key type. 占用一个字节
 		index.keyType = keyType(data[o])
+		// 不合法类型, keytype : v 和 d
 		if index.keyType > keyTypeVal {
 			return newErrBatchCorrupted(fmt.Sprintf("bad record: invalid type %#x", uint(index.keyType)))
 		}
+		// 移动偏移量 到keylength 位置
 		o++
 
-		// Key.
+		// Key. 占用 8字节, x: keylength 值,
 		x, n := binary.Uvarint(data[o:])
+
+		// 移动偏移量 到key位置
 		o += n
+
+		// 不合法 , 数据中没有记录keylength
 		if n <= 0 || o+int(x) > len(data) {
 			return newErrBatchCorrupted("bad record: invalid key length")
 		}
+		// 记录key的位置
 		index.keyPos = o
 		index.keyLen = int(x)
+		// 移动偏移量到 vauleLength位置
 		o += index.keyLen
 
 		// Value.
 		if index.keyType == keyTypeVal {
+
+			// value Length：  占用8字节
 			x, n = binary.Uvarint(data[o:])
+
+			// 移动偏移量到 value
 			o += n
+			// 格式不合法，没有记录value length
 			if n <= 0 || o+int(x) > len(data) {
 				return newErrBatchCorrupted("bad record: invalid value length")
 			}
+
+			// 记录value 的位置
 			index.valuePos = o
 			index.valueLen = int(x)
+
+			// 移动偏移量到下一个batch
 			o += index.valueLen
 		} else {
+			// 当前的key 是删除的key
 			index.valuePos = 0
 			index.valueLen = 0
 		}
@@ -433,34 +461,66 @@ func decodeBatch(data []byte, fn func(i int, index batchIndex) error) error {
 	return nil
 }
 
+// 从journal block data 的数据部分解析出 kv 并插入到memdb(skiplist) 中
 func decodeBatchToMem(data []byte, expectSeq uint64, mdb *memdb.DB) (seq uint64, batchLen int, err error) {
+	/*
+
+		Journal 文件格式:
+													Full
+												First  ╱
+												╱Middle─╱
+												╱  Last
+											╱
+			┌────────────┬────────────┬────────────┬────────────┬────────────┬────────────┬────────────┬────────────┬────────────┬────────────┐
+			│  checkSum  │Data Length │    Type    │ Batch Seq  │ Batch Size │  Key Type  │ Key Length │    Key     │Value Length│   Value    │
+			│            │            │            │            │            │            │            │            │            │            │
+			└────────────┴────────────┴────────────┴────────────┴────────────┴────────────┴────────────┴────────────┴────────────┴────────────┘
+				│                         │            │                                                                             │
+				│           Block         │            │                                                                             │
+				└───────────Header────────┘            └────────────────────────────────────Data─────────────────────────────────────┘
+		即 Batch Seq  和 Batch Size
+	*/
 	seq, batchLen, err = decodeBatchHeader(data)
 	if err != nil {
 		return 0, 0, err
 	}
+	// journal 的batch seq 不合法 或者说 mainfest文件的session record seq 不合法
 	if seq < expectSeq {
 		return 0, 0, newErrBatchCorrupted("invalid sequence number")
 	}
+	// 取出batch 数据
 	data = data[batchHeaderLen:]
 	var ik []byte
+
+	// 记录解析出batch的个数
 	var decodedLen int
+
+	// 解析出kv
 	err = decodeBatch(data, func(i int, index batchIndex) error {
+		// 不合法
 		if i >= batchLen {
 			return newErrBatchCorrupted("invalid records length")
 		}
+
+		// 生成ikey
 		ik = makeInternalKey(ik, index.k(data), seq+uint64(i), index.keyType)
+
+		// 插入到skiplist
 		if err := mdb.Put(ik, index.v(data)); err != nil {
 			return err
 		}
 		decodedLen++
 		return nil
 	})
+
+	// 不合法，解析出的batch个数 和 头记录的个数不一样
 	if err == nil && decodedLen != batchLen {
 		err = newErrBatchCorrupted(fmt.Sprintf("invalid records length: %d vs %d", batchLen, decodedLen))
 	}
 	return
 }
 
+// 生成 batch 的头信息, 及batch seq 和 batch size
 func encodeBatchHeader(dst []byte, seq uint64, batchLen int) []byte {
 	// batch header 头的长度12
 	// [0..7] leveldb.seq
@@ -471,12 +531,16 @@ func encodeBatchHeader(dst []byte, seq uint64, batchLen int) []byte {
 	return dst
 }
 
+// 从journal block 的数据部分解析出 batch的头 (batch seq, batch的长度)
 func decodeBatchHeader(data []byte) (seq uint64, batchLen int, err error) {
+	// 数据不合法，长度 小于 batch header
 	if len(data) < batchHeaderLen {
 		return 0, 0, newErrBatchCorrupted("too short")
 	}
 
+	// seq 占用8字节，取前8个字节 (注: uint64 占用8字节)
 	seq = binary.LittleEndian.Uint64(data)
+	// batchlen 占用4字节，取后面4个字节
 	batchLen = int(binary.LittleEndian.Uint32(data[8:]))
 	if batchLen < 0 {
 		return 0, 0, newErrBatchCorrupted("invalid records length")

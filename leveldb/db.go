@@ -510,7 +510,7 @@ func (db *DB) recoverJournal() error {
 
 	// Journals that will be recovered.
 	var fds []storage.FileDesc
-	// 过滤比当前session 记录的journal 序号大的 wal文件, 因为这部分内容才是新增的
+	// 找出比当前session 记录的journal 序号大的 wal文件, 因为这部分内容才是新增的
 	for _, fd := range rawFds {
 		if fd.Num >= db.s.stJournalNum || fd.Num == db.s.stPrevJournalNum {
 			fds = append(fds, fd)
@@ -585,7 +585,7 @@ func (db *DB) recoverJournal() error {
 			// Replay journal to memdb.
 			mdb.Reset()
 			for {
-				r, err := jr.Next() // 设置r.buf 左右偏移量，即数据部分
+				r, err := jr.Next() // 以block 为单位读取journal 并设置r.buf 左右偏移量，即数据部分
 				if err != nil {
 					if err == io.EOF {
 						break
@@ -621,7 +621,7 @@ func (db *DB) recoverJournal() error {
 				// Save sequence number.
 				db.seq = batchSeq + uint64(batchLen)
 
-				// Flush it if large enough.
+				// Flush it if large enough. 达到了checkpoint, 生成level0 的 sstalbe文件
 				if mdb.Size() >= writeBuffer {
 					if _, err := db.s.flushMemdb(rec, mdb, 0); err != nil {
 						fr.Close()
@@ -727,6 +727,7 @@ func (db *DB) recoverJournalRO() error {
 			// Replay journal to memdb.
 			for {
 
+				// 一次读一个块，即journal block 32k的大小, 保存在r.buf[r.i:r.j]中, 是当前block 整个的data部分
 				r, err := jr.Next()
 				if err != nil {
 					if err == io.EOF {
@@ -738,6 +739,7 @@ func (db *DB) recoverJournalRO() error {
 				}
 
 				buf.Reset()
+				// 从r.buf以512字节大小读取数据保存在buf中
 				if _, err := buf.ReadFrom(r); err != nil {
 					if err == io.ErrUnexpectedEOF {
 						// This is error returned due to corruption, with strict == false.
