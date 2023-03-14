@@ -214,6 +214,7 @@ func (s *session) refLoop() {
 			}
 			deltas[d.vid] = d
 
+			// v.releaseNB() 释放version 的时候，及ref=0 时，发送消息：vTask{vid: v.id, files: v.levels, created: time.Now()}:
 		case t := <-s.relCh:
 			if _, exist := referenced[t.vid]; exist {
 				for _, tt := range t.files {

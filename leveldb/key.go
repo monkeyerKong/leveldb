@@ -72,6 +72,28 @@ func init() {
 
 type internalKey []byte
 
+/*
+internal Key的格式：
+
+		                                                                	┌──────────────┐
+	                                                                	│  Value Key   │
+	                                                  	┌────────────▶│  Delete Key  │
+	                                                  	│             │              │
+	                                                  	│             └──────────────┘
+	                                                  	│
+	                                                  	│
+	                                                  	│
+		┌───────────────────┬───────────────────┬───────────────────┐
+		│                   │                   │                   │
+		│     User Key      │      DB Seq       │     Key Type      │
+		│                   │                   │                   │
+		└───────────────────┴───────────────────┴───────────────────┘
+	          	│                                       │
+	          	│                                       │
+	          	└─────────────InternalKey───────────────┘
+	User Key: 指的客户端输入的key 称作ukey
+	Db seq: 数据库当前的序列号
+*/
 func makeInternalKey(dst, ukey []byte, seq uint64, kt keyType) internalKey {
 	if seq > keyMaxSeq {
 		panic("leveldb: invalid sequence number")

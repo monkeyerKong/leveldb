@@ -500,6 +500,9 @@ func recoverTable(s *session, o *opt.Options) error {
 	return s.commit(rec, false)
 }
 
+// 查找db下面的journal文件，过滤出大于在mainfest文件记录的journal号或者等于PrevJournalNum, 以block 为单位读取journal日志，并把这部分日志内容插入到memdb中，如果memdb达到了checkpoint， 则会做minor compaction, 在level0 生成sstabel文件
+// apply journail 后，生成session record 在写入mainfest 文件中的journal
+// 如果存在多个journal文件，recoverJournal 逐个把journal 内容 插入到memdb中，在做minor compaction ，把数据写入level 0 sstable, 在删除journal文件
 func (db *DB) recoverJournal() error {
 	// Get all journals and sort it by file number. 000098.log 这类文件
 	rawFds, err := db.s.stor.List(storage.TypeJournal)
@@ -636,7 +639,7 @@ func (db *DB) recoverJournal() error {
 			ofd = fd
 		}
 
-		// Flush the last memdb.
+		// Flush the last memdb. journal 文件最新的数据从memdb flush level0 sstable文件中
 		if mdb.Len() > 0 {
 			if _, err := db.s.flushMemdb(rec, mdb, 0); err != nil {
 				return err

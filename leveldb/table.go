@@ -59,8 +59,8 @@ func newTableFile(fd storage.FileDesc, size int64, imin, imax internalKey) *tFil
 
 	// We arrange to automatically compact this file after
 	// a certain number of seeks.  Let's assume:
-	//   (1) One seek costs 10ms
-	//   (2) Writing or reading 1MB costs 10ms (100MB/s)
+	//   (1) One seek costs 10ms , 是机械盘时代，当时对机械盘计算就是这样的，一个查找(seek)差不多 10ms
+	//   (2) Writing or reading 1MB costs 10ms (100MB/s) 写或者 读1MB 数据差不多也是 10ms
 	//   (3) A compaction of 1MB does 25MB of IO:
 	//         1MB read from this level
 	//         10-12MB read from next level (boundaries may be misaligned)

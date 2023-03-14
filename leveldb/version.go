@@ -68,6 +68,7 @@ func (v *version) incref() {
 	}
 }
 
+// 当版本的引用计数 == 0 的时候，通知refloop() relCh模块, 并标记released = True
 func (v *version) releaseNB() {
 	v.ref--
 	if v.ref > 0 {

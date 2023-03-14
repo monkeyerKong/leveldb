@@ -164,6 +164,7 @@ func (p *sessionRecord) addTable(level int, num, size int64, imin, imax internal
 	p.addedTables = append(p.addedTables, atRecord{level, num, size, imin, imax})
 }
 
+// 在session record 的addedTables 中添加 level i中添加文件元数据信
 func (p *sessionRecord) addTableFile(level int, t *tFile) {
 	p.addTable(level, t.fd.Num, t.size, t.imin, t.imax)
 }

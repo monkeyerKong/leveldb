@@ -49,6 +49,7 @@ func (s *session) flushMemdb(rec *sessionRecord, mdb *memdb.DB, maxLevel int) (i
 	// higher level, thus maximum possible level is always picked, while
 	// overlapping deletion marker pushed into lower level.
 	// See: https://github.com/syndtr/goleveldb/issues/127.
+	// 当maxlevel =0 时，返回 0
 	flushLevel := s.pickMemdbLevel(t.imin.ukey(), t.imax.ukey(), maxLevel)
 	rec.addTableFile(flushLevel, t)
 
