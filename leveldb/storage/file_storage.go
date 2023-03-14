@@ -298,7 +298,7 @@ func (fs *fileStorage) setMeta(fd FileDesc) error {
 	return nil
 }
 
-// 修改 CURRENT 文件, 需要锁保护
+// 修改 CURRENT /mainfest 文件, 需要锁保护
 func (fs *fileStorage) SetMeta(fd FileDesc) error {
 	if !FileDescOk(fd) {
 		return ErrInvalidFile

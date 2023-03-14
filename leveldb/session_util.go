@@ -369,8 +369,9 @@ func (s *session) getCompPtr(level int) internalKey {
 // Manifest related utils.
 
 // Fill given session record obj with current states; need external
-// synchronization.
+// synchronization. 用当前的session 的信息填充record 信息
 func (s *session) fillRecord(r *sessionRecord, snapshot bool) {
+	// 设置rec next file 号
 	r.setNextFileNum(s.nextFileNum())
 
 	if snapshot {
@@ -413,13 +414,15 @@ func (s *session) recordCommited(rec *sessionRecord) {
 	}
 }
 
-// Create a new manifest file; need external synchronization.
+// Create a new manifest file; need external synchronization. 把session record 和 version.lelves merge 到record 中，写入manifest, 并更新current文件
 func (s *session) newManifest(rec *sessionRecord, v *version) (err error) {
+	// 创建manifest 文件
 	fd := storage.FileDesc{Type: storage.TypeManifest, Num: s.allocFileNum()}
 	writer, err := s.stor.Create(fd)
 	if err != nil {
 		return
 	}
+	// new 一个manifest 的writer
 	jw := journal.NewWriter(writer)
 
 	if v == nil {
@@ -429,7 +432,11 @@ func (s *session) newManifest(rec *sessionRecord, v *version) (err error) {
 	if rec == nil {
 		rec = &sessionRecord{}
 	}
+
+	// 通过session填充seq, nextfile number , journal num, comptr相关新
 	s.fillRecord(rec, true)
+
+	// 通过version levels填充 rec 的added table, deleted table
 	v.fillRecord(rec)
 
 	defer func() {
@@ -460,20 +467,24 @@ func (s *session) newManifest(rec *sessionRecord, v *version) (err error) {
 	if err != nil {
 		return
 	}
+	// record 编码 写入
 	err = rec.encode(w)
 	if err != nil {
 		return
 	}
+	// os.flush
 	err = jw.Flush()
 	if err != nil {
 		return
 	}
+	//os.fsync
 	if !s.o.GetNoSync() {
 		err = writer.Sync()
 		if err != nil {
 			return
 		}
 	}
+	// 在current 文件中写入mainfest信息
 	err = s.stor.SetMeta(fd)
 	return
 }

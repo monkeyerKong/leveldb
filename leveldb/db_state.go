@@ -149,13 +149,20 @@ func (db *DB) newMem(n int) (mem *memDB, err error) {
 	}
 	db.journalWriter = w
 	db.journalFd = fd
+
+	// 当前使用的memdb 被frozen
 	db.frozenMem = db.mem
+
+	// 新创建一个memdb
 	mem = db.mpoolGet(n)
 	mem.incref() // for self
 	mem.incref() // for caller
+
+	// db.memdb 被设置为新的mem
 	db.mem = mem
 	// The seq only incremented by the writer. And whoever called newMem
 	// should hold write lock, so no need additional synchronization here.
+	// 记录froze 的seq
 	db.frozenSeq = db.seq
 	return
 }

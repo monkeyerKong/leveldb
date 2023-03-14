@@ -289,6 +289,7 @@ func (v *version) spawn(r *sessionRecord, trivial bool) *version {
 	return staging.finish(trivial)
 }
 
+// 使用版本记录的levels 填充 record 的 addedtables
 func (v *version) fillRecord(r *sessionRecord) {
 	for level, tables := range v.levels {
 		for _, t := range tables {
@@ -443,7 +444,7 @@ func (p *versionStaging) getScratch(level int) *tablesScratch {
 	return &(p.levels[level])
 }
 
-// 对应Manifest session record, 从文件中record 补充当前的version tag 的 levels
+// 对应Manifest session record/ 或者内存的record,  补充当前的version tag 的 levels
 func (p *versionStaging) commit(r *sessionRecord) {
 	// Deleted tables.
 	for _, r := range r.deletedTables {
@@ -467,7 +468,7 @@ func (p *versionStaging) commit(r *sessionRecord) {
 			scratch.added = make(map[int64]atRecord)
 		}
 		/*
-			r record内容：
+			r record added tables内容：
 				├────────────────────┼──────────────────────────┼────────────────────┼──────────────────────────┐
 				│   Type=KNewFile    │          Level           │      File Num      │        File Size         │
 				│     (Varint32)     │        (Varint32)        │     (Varint64)     │        (Varint64)        │

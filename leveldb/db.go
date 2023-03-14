@@ -652,9 +652,12 @@ func (db *DB) recoverJournal() error {
 		return err
 	}
 
-	// Commit.
+	// Commit. 设置session record 的 journal num
 	rec.setJournalNum(db.journalFd.Num)
+
+	// session record 记录seq
 	rec.setSeqNum(db.seq)
+	// 新生产一个新的版本号，并更新record 到manifest文件中，同时把manifest文件号更新到current文件, 更新session.vtversion为新version
 	if err := db.s.commit(rec, false); err != nil {
 		// Close journal on error.
 		if db.journal != nil {

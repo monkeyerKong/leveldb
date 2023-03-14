@@ -212,6 +212,7 @@ func (p *sessionRecord) putBytes(w io.Writer, x []byte) {
 	_, p.err = w.Write(x)
 }
 
+// 对record 二进制编码，写入record 到manifest文件中
 func (p *sessionRecord) encode(w io.Writer) error {
 	p.err = nil
 	if p.has(recComparer) {

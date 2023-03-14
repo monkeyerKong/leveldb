@@ -225,7 +225,7 @@ func (s *session) commit(r *sessionRecord, trivial bool) (err error) {
 	v := s.version()
 	defer v.release()
 
-	// spawn new version based on current version
+	// spawn new version based on current version, 生产新version ，把r中的变化的sstable 和 base sstable 做并集合并到新version的levels
 	nv := v.spawn(r, trivial)
 
 	// abandon useless version id to prevent blocking version processing loop.
@@ -238,6 +238,7 @@ func (s *session) commit(r *sessionRecord, trivial bool) (err error) {
 
 	if s.manifest == nil {
 		// manifest journal writer not yet created, create one
+		// 新生产一个manifest, 并记录新的session record
 		err = s.newManifest(r, nv)
 	} else if s.manifest.Size() >= s.o.GetMaxManifestFileSize() {
 		// pass nil sessionRecord to avoid over-reference table file
